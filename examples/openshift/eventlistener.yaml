@@ -1,0 +1,124 @@
+# Optional Tekton Triggers path, for when the pipeline definition should stay
+# under the cluster team's control: Developer Hub only posts an event and the
+# TriggerTemplate below decides what runs.
+#
+#   oc apply -n cdops-ci -f examples/openshift/eventlistener.yaml
+#
+# The plugin POSTs this body:
+#   {
+#     "source": "backstage-tekton-trigger",
+#     "entityRef": "component:default/claims-ui",
+#     "pipeline": "build-and-deploy",
+#     "namespace": "cdops-ci",
+#     "triggeredBy": "user:default/jay",
+#     "params": { "git-revision": "main" }
+#   }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: developer-hub-trigger-secret
+  namespace: cdops-ci
+type: Opaque
+stringData:
+  # Must match tektonTrigger.eventListeners[].secret.
+  token: replace-me
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: developer-hub
+  namespace: cdops-ci
+spec:
+  params:
+    - name: entity-ref
+      value: $(body.entityRef)
+    - name: triggered-by
+      value: $(body.triggeredBy)
+    - name: git-revision
+      value: $(body.params.git-revision)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: developer-hub
+  namespace: cdops-ci
+spec:
+  params:
+    - name: entity-ref
+    - name: triggered-by
+    - name: git-revision
+      default: main
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: build-and-deploy-
+        labels:
+          app.kubernetes.io/managed-by: backstage-tekton-trigger
+          # Lets the plugin list these runs for the entity.
+          tekton.dev/pipeline: build-and-deploy
+        annotations:
+          backstage.io/entity-ref: $(tt.params.entity-ref)
+          backstage.io/triggered-by: $(tt.params.triggered-by)
+      spec:
+        pipelineRef:
+          name: build-and-deploy
+        params:
+          - name: git-revision
+            value: $(tt.params.git-revision)
+        taskRunTemplate:
+          serviceAccountName: pipeline
+        timeouts:
+          pipeline: 1h0m0s
+        workspaces:
+          - name: source
+            volumeClaimTemplate:
+              spec:
+                accessModes: ['ReadWriteOnce']
+                resources:
+                  requests:
+                    storage: 1Gi
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: cdops-ci
+  namespace: cdops-ci
+spec:
+  serviceAccountName: pipeline
+  triggers:
+    - name: developer-hub
+      interceptors:
+        - name: only-developer-hub
+          ref:
+            name: cel
+          params:
+            - name: filter
+              # The shared secret is compared in CEL because the CEL interceptor
+              # cannot read a Secret. Keep the route internal (or add a
+              # NetworkPolicy) rather than relying on this header alone.
+              value: >-
+                header.match('x-backstage-token', 'replace-me') &&
+                body.source == 'backstage-tekton-trigger'
+      bindings:
+        - ref: developer-hub
+      template:
+        ref: developer-hub
+---
+# Expose the EventListener only if Developer Hub runs off-cluster; prefer the
+# in-cluster Service URL otherwise.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: el-cdops-ci
+  namespace: cdops-ci
+spec:
+  to:
+    kind: Service
+    name: el-cdops-ci
+  port:
+    targetPort: http-listener
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

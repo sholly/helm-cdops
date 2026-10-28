@@ -1,0 +1,60 @@
+# Configuration for the tekton-trigger backend plugin.
+#
+# Merge this into app-config.yaml (or app-config.local.yaml for local dev).
+# Everything secret is read from the environment so nothing lands in git.
+tektonTrigger:
+  # Used when an entity has no tekton.dev/cluster annotation.
+  defaultCluster: ocp-dev
+
+  clusters:
+    - name: ocp-dev
+      url: https://api.ocp-dev.example.com:6443
+      # ServiceAccount token from examples/openshift/rbac.yaml.
+      # Omit both token options when Developer Hub runs on the same cluster:
+      # the plugin then reads the projected token at
+      # /var/run/secrets/kubernetes.io/serviceaccount/token.
+      serviceAccountToken: ${TEKTON_OCP_DEV_TOKEN}
+      # base64-encoded PEM bundle, e.g. the router-ca or an internal CA.
+      caData: ${TEKTON_OCP_DEV_CA}
+      # Deep links in the UI point here.
+      dashboardUrl: https://console-openshift-console.apps.ocp-dev.example.com
+      dashboardType: openshift
+      # Defence in depth: entities may only point at these namespaces.
+      allowedNamespaces:
+        - cdops-ci
+        - cdops-build
+
+    - name: ocp-prod
+      url: https://api.ocp-prod.example.com:6443
+      serviceAccountToken: ${TEKTON_OCP_PROD_TOKEN}
+      caData: ${TEKTON_OCP_PROD_CA}
+      dashboardUrl: https://console-openshift-console.apps.ocp-prod.example.com
+      allowedNamespaces:
+        - cdops-release
+
+  # Optional: entities annotated with tekton.dev/event-listener fire these
+  # instead of creating a PipelineRun directly.
+  eventListeners:
+    - name: cdops-el
+      url: https://el-cdops-ci.apps.ocp-dev.example.com
+      secret: ${TEKTON_EVENT_LISTENER_SECRET}
+      secretHeader: X-Backstage-Token
+      cluster: ocp-dev
+      namespace: cdops-ci
+
+  # Applied to every PipelineRun the plugin creates.
+  pipelineRun:
+    serviceAccountName: pipeline
+    timeout: 1h0m0s
+    labels:
+      app.kubernetes.io/part-of: developer-hub
+    annotations:
+      cdops.com/triggered-from: developer-hub
+
+  # Runs listed per entity.
+  maxRuns: 20
+
+# Optional: gate triggering behind the permission framework. Without a policy
+# every authenticated user who can see the entity may trigger its pipeline.
+permission:
+  enabled: true

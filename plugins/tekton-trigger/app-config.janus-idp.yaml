@@ -1,0 +1,28 @@
+# Default mount points for the exported dynamic plugin, picked up by Red Hat
+# Developer Hub when the plugin is enabled. Override any of this in the
+# dynamic-plugins ConfigMap.
+dynamicPlugins:
+  frontend:
+    cdops.plugin-tekton-trigger:
+      mountPoints:
+        - mountPoint: entity.page.ci/cards
+          importName: EntityTektonTriggerContent
+          config:
+            layout:
+              gridColumn: '1 / -1'
+            if:
+              anyOf:
+                - hasAnnotation: tekton.dev/pipeline
+                - hasAnnotation: tekton.dev/event-listener
+        - mountPoint: entity.page.overview/cards
+          importName: EntityTektonTriggerCard
+          config:
+            layout:
+              gridColumnEnd:
+                lg: 'span 4'
+                md: 'span 6'
+                xs: 'span 12'
+            if:
+              anyOf:
+                - hasAnnotation: tekton.dev/pipeline
+                - hasAnnotation: tekton.dev/event-listener

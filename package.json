@@ -1,0 +1,35 @@
+{
+  "name": "cdops-tekton-trigger",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backstage / Red Hat Developer Hub plugin that triggers OpenShift Pipelines (Tekton)",
+  "workspaces": {
+    "packages": [
+      "plugins/*"
+    ]
+  },
+  "scripts": {
+    "tsc": "tsc",
+    "build": "backstage-cli repo build --all",
+    "test": "backstage-cli repo test",
+    "test:all": "backstage-cli repo test --coverage",
+    "lint": "backstage-cli repo lint --since origin/main",
+    "lint:all": "backstage-cli repo lint",
+    "fix": "backstage-cli repo fix --publish",
+    "clean": "backstage-cli repo clean",
+    "prettier:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@backstage/cli": "^0.33.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.17.0",
+    "@types/react": "^18.3.12",
+    "prettier": "^3.4.2",
+    "typescript": "~5.8.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "prettier": "@backstage/cli/config/prettier",
+  "resolutions": {}
+}

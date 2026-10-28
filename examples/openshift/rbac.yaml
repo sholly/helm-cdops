@@ -1,0 +1,63 @@
+# Least-privilege access for the tekton-trigger backend plugin.
+#
+#   oc apply -n cdops-ci -f examples/openshift/rbac.yaml
+#
+# Apply once per namespace that Developer Hub is allowed to run pipelines in,
+# and list those namespaces under tektonTrigger.clusters[].allowedNamespaces.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: developer-hub-tekton
+  namespace: cdops-ci
+  labels:
+    app.kubernetes.io/part-of: developer-hub
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer-hub-tekton
+  namespace: cdops-ci
+  labels:
+    app.kubernetes.io/part-of: developer-hub
+rules:
+  # Read the Pipeline so the UI can render its parameters.
+  - apiGroups: ['tekton.dev']
+    resources: ['pipelines']
+    verbs: ['get', 'list']
+  # Create runs, read their status, and patch spec.status to cancel.
+  - apiGroups: ['tekton.dev']
+    resources: ['pipelineruns']
+    verbs: ['get', 'list', 'watch', 'create', 'patch']
+  # Per-task status in the run detail view.
+  - apiGroups: ['tekton.dev']
+    resources: ['taskruns']
+    verbs: ['get', 'list']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developer-hub-tekton
+  namespace: cdops-ci
+  labels:
+    app.kubernetes.io/part-of: developer-hub
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: developer-hub-tekton
+subjects:
+  - kind: ServiceAccount
+    name: developer-hub-tekton
+    namespace: cdops-ci
+---
+# Only needed when Developer Hub runs OUTSIDE this cluster. On-cluster
+# deployments should use the projected token instead (leave serviceAccountToken
+# unset) so credentials rotate automatically.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: developer-hub-tekton-token
+  namespace: cdops-ci
+  annotations:
+    kubernetes.io/service-account.name: developer-hub-tekton
+type: kubernetes.io/service-account-token

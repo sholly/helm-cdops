@@ -1,0 +1,11 @@
+{
+  "extends": "@backstage/cli/config/tsconfig.json",
+  "include": ["plugins"],
+  "exclude": ["node_modules"],
+  "compilerOptions": {
+    // New JSX transform, so components need no React default import.
+    "jsx": "react-jsx",
+    "outDir": "dist-types",
+    "rootDir": "."
+  }
+}

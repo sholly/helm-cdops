@@ -1,0 +1,31 @@
+# Red Hat Developer Hub: load the exported plugins as dynamic plugins and mount
+# the frontend extensions on the entity page.
+#
+# Build the artifacts first (see README), then make them available to RHDH by
+# publishing them to an OCI registry or an npm registry and referencing them
+# from the dynamic-plugins ConfigMap.
+dynamicPlugins:
+  frontend:
+    cdops.plugin-tekton-trigger:
+      mountPoints:
+        - mountPoint: entity.page.ci/cards
+          importName: EntityTektonTriggerContent
+          config:
+            layout:
+              gridColumn: '1 / -1'
+            if:
+              anyOf:
+                - hasAnnotation: tekton.dev/pipeline
+                - hasAnnotation: tekton.dev/event-listener
+        - mountPoint: entity.page.overview/cards
+          importName: EntityTektonTriggerCard
+          config:
+            layout:
+              gridColumnEnd:
+                lg: 'span 4'
+                md: 'span 6'
+                xs: 'span 12'
+            if:
+              anyOf:
+                - hasAnnotation: tekton.dev/pipeline
+                - hasAnnotation: tekton.dev/event-listener
