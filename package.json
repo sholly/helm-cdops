@@ -27,9 +27,20 @@
     "prettier": "^3.4.2",
     "typescript": "~5.8.0"
   },
+  "dependenciesMeta": {
+    "@swc/core": {
+      "built": false
+    },
+    "core-js-pure": {
+      "built": false
+    },
+    "esbuild": {
+      "built": false
+    }
+  },
   "engines": {
     "node": ">=20"
   },
   "prettier": "@backstage/cli/config/prettier",
-  "resolutions": {}
+  "packageManager": "yarn@4.18.1"
 }

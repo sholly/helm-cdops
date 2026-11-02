@@ -251,8 +251,15 @@ yarn build
 yarn --cwd plugins/tekton-trigger start   # standalone dev app for the frontend
 ```
 
-Node 20 or newer. Nothing in the dependency tree needs a native toolchain —
-no compiler, Python or `node-gyp` on the build host. The backend tests use the
+Node 20 or newer, and Yarn 4 — the version is pinned by `packageManager` in
+the root `package.json` and a matching release is committed under
+`.yarn/releases`, so `yarn` picks it up with no setup (enable Corepack with
+`corepack enable` if you'd rather it manage the download). `yarn test` without
+`CI=1` starts Jest in watch mode.
+
+Nothing in the dependency tree needs a native toolchain — no compiler, Python
+or `node-gyp` on the build host. Install scripts are disabled repo-wide
+(`enableScripts` is left at Yarn 4's default). The backend tests use the
 local service stubs in `plugins/tekton-trigger-backend/src/service/testMocks.ts`
 rather than `@backstage/backend-test-utils`, which would drag in
 `better-sqlite3` and (via testcontainers) `cpu-features`, both of which build

@@ -44,7 +44,7 @@ requirements — no `podman` and no push rights are needed. Still required:
 From the repo root:
 
 ```bash
-yarn install --frozen-lockfile
+yarn install --immutable
 yarn tsc
 yarn test
 yarn build            # backstage-cli repo build --all

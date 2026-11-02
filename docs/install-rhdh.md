@@ -27,7 +27,7 @@ steps 2 through 4, then come back here for steps 5 onward.
 | RHDH on a Backstage ≥ 1.39 base | The backend uses `coreServices.permissionsRegistry`, added in Backstage 1.39. This repo is pinned to 1.42 (`backstage.json`). | `oc exec deploy/<rhdh> -- cat /opt/app-root/src/package.json \| grep backstage` or the version matrix for your RHDH release |
 | OpenShift Pipelines ≥ 1.11 | The plugin uses the `tekton.dev/v1` API. | `oc get csv -n openshift-operators \| grep pipelines` |
 | RHDH's RBAC plugin enabled (optional) | Needed only if you want the three permissions to show up in the RBAC UI. | `oc get cm dynamic-plugins-rhdh -o yaml \| grep rbac` |
-| Node 20 or newer + yarn, on the build host | `@backstage/cli` and the RHDH CLI. No native toolchain needed — nothing in the tree compiles from source. | `node -v` |
+| Node 20 or newer + Yarn 4, on the build host | `@backstage/cli` and the RHDH CLI. Yarn 4 is pinned by `packageManager` and committed under `.yarn/releases`. No native toolchain needed — nothing in the tree compiles from source. | `node -v` |
 | `podman` (or `docker`/`buildah`) and push rights to a registry | Dynamic plugins are shipped as an OCI image. | `podman login quay.io` |
 | An RHDH CLI version matching your RHDH release | Command names and flags changed between `@janus-idp/cli` (RHDH ≤ 1.6) and `@red-hat-developer-hub/cli` (1.7+). | see [the RHDH version matrix](https://github.com/redhat-developer/rhdh/blob/main/docs/dynamic-plugins/versions.md) |
 
@@ -98,7 +98,7 @@ editing the script or by running the pinned command from step 2 by hand.
 Run everything from the repo root.
 
 ```bash
-yarn install --frozen-lockfile
+yarn install --immutable
 yarn tsc
 yarn test
 yarn build            # backstage-cli repo build --all
