@@ -1,0 +1,93 @@
+# Red Hat Developer Hub: load the two exported plugins from tarballs served over
+# plain HTTP by an in-cluster registry (examples/openshift/plugin-registry.yaml).
+#
+# See docs/host-http-plugin-registry.md for the build, pack and hosting steps.
+# For the OCI-image equivalent of this file, see docs/install-rhdh.md step 4.
+#
+# This is the `dynamic-plugins.yaml` shape: paste it into the ConfigMap the
+# Backstage CR names, or nest the two entries under `global.dynamic.plugins` in
+# Helm values (keeping `global.dynamic.includes`).
+#
+# Replace, in both entries:
+#   - the tarball file names, if `npm pack` printed something different:
+#       jq -r .name plugins/*/dist-dynamic/package.json
+#   - the sha512 integrity values, from:
+#       npm pack --pack-destination /tmp/plugin-registry --json \
+#         | jq -r '.[0] | "\(.filename)  \(.integrity)"'
+#
+# `integrity` is a hash of the tarball CONTENT and is required for tarballs.
+# Never overwrite a published file in place — bump the version so the URL
+# changes, or every running install fails with a hash mismatch.
+includes:
+  # Keep this: dropping it disables every plugin RHDH enables by default.
+  - dynamic-plugins.default.yaml
+plugins:
+  # ---- backend -------------------------------------------------------------
+  - package: http://plugin-registry:8080/cdops-plugin-tekton-trigger-backend-dynamic-0.1.0.tgz
+    integrity: sha512-REPLACE_ME_BACKEND_HASH
+    disabled: false
+    pluginConfig:
+      tektonTrigger:
+        defaultCluster: ocp-dev
+        clusters:
+          - name: ocp-dev
+            url: https://api.ocp-dev.example.com:6443
+            # Omit serviceAccountToken when RHDH runs on this cluster: the
+            # plugin then reads the projected token at
+            # /var/run/secrets/kubernetes.io/serviceaccount/token on every
+            # request, so rotation needs no restart.
+            dashboardUrl: https://console-openshift-console.apps.ocp-dev.example.com
+            dashboardType: openshift
+            allowedNamespaces:
+              - cdops-ci
+              - cdops-build
+          - name: ocp-prod
+            url: https://api.ocp-prod.example.com:6443
+            serviceAccountToken: ${TEKTON_OCP_PROD_TOKEN}
+            caData: ${TEKTON_OCP_PROD_CA}
+            dashboardUrl: https://console-openshift-console.apps.ocp-prod.example.com
+            allowedNamespaces:
+              - cdops-release
+        pipelineRun:
+          serviceAccountName: pipeline
+          timeout: 1h0m0s
+          labels:
+            app.kubernetes.io/part-of: developer-hub
+          annotations:
+            cdops.com/triggered-from: developer-hub
+        maxRuns: 20
+
+  # ---- frontend ------------------------------------------------------------
+  # pluginConfig is REQUIRED here. Without the mount points the Scalprum bundle
+  # loads and renders nothing, with no console error.
+  - package: http://plugin-registry:8080/cdops-plugin-tekton-trigger-0.1.0.tgz
+    integrity: sha512-REPLACE_ME_FRONTEND_HASH
+    disabled: false
+    pluginConfig:
+      dynamicPlugins:
+        frontend:
+          cdops.plugin-tekton-trigger:
+            mountPoints:
+              # Entity "CI" tab — already part of RHDH's default entity page,
+              # so no entityTabs entry is needed.
+              - mountPoint: entity.page.ci/cards
+                importName: EntityTektonTriggerContent
+                config:
+                  layout:
+                    gridColumn: '1 / -1'
+                  if:
+                    anyOf:
+                      - hasAnnotation: tekton.dev/pipeline
+                      - hasAnnotation: tekton.dev/event-listener
+              - mountPoint: entity.page.overview/cards
+                importName: EntityTektonTriggerCard
+                config:
+                  layout:
+                    gridColumnEnd:
+                      lg: 'span 4'
+                      md: 'span 6'
+                      xs: 'span 12'
+                  if:
+                    anyOf:
+                      - hasAnnotation: tekton.dev/pipeline
+                      - hasAnnotation: tekton.dev/event-listener

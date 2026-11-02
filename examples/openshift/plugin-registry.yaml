@@ -1,0 +1,174 @@
+# An in-cluster HTTP registry for the exported dynamic plugins.
+#
+# This is the declarative equivalent of the `oc new-build` / `oc new-app` pair
+# in docs/host-http-plugin-registry.md. Use whichever you prefer; the result is
+# the same httpd pod serving the plugin tarballs at
+# http://plugin-registry:8080/<file>.tgz.
+#
+#   oc apply -n <rhdh-namespace> -f examples/openshift/plugin-registry.yaml
+#   oc start-build plugin-registry -n <rhdh-namespace> \
+#     --from-dir=/tmp/plugin-registry --wait
+#
+# `--from-dir` uploads the WHOLE directory into the image document root, so it
+# must contain only the .tgz files you want served.
+#
+# No namespace is set on any object, so `oc apply -n` decides where they land.
+# RHDH fetches these URLs from its install-dynamic-plugins init container, so
+# the Service has to be reachable from the RHDH namespace — putting the registry
+# in that same namespace is the simplest arrangement. Deliberately no Route:
+# nothing here authenticates the download, and a public Route would publish your
+# plugin bundles to anyone who finds the host.
+---
+# Holds the builder image. `oc new-build httpd` imports this for you; declared
+# here so `oc apply` is self-contained.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: httpd
+  labels:
+    app.kubernetes.io/name: plugin-registry
+    app.kubernetes.io/part-of: developer-hub
+spec:
+  tags:
+    - name: 2.4-ubi9
+      from:
+        kind: DockerImage
+        # Confirm the tag your cluster has: oc get is httpd -n openshift
+        name: registry.access.redhat.com/ubi9/httpd-24:latest
+      referencePolicy:
+        type: Local
+---
+# Holds the built registry image.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: plugin-registry
+  labels:
+    app.kubernetes.io/name: plugin-registry
+    app.kubernetes.io/part-of: developer-hub
+---
+# Binary S2I build: the tarballs are uploaded from your workstation with
+# `oc start-build --from-dir`, so nothing about the plugin contents is stored
+# in git or pulled from a registry at build time.
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: plugin-registry
+  labels:
+    app.kubernetes.io/name: plugin-registry
+    app.kubernetes.io/part-of: developer-hub
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Source
+    sourceStrategy:
+      from:
+        kind: ImageStreamTag
+        name: httpd:2.4-ubi9
+  output:
+    to:
+      kind: ImageStreamTag
+      name: plugin-registry:latest
+  # No triggers: a build only happens when you run `oc start-build`.
+  triggers: []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plugin-registry
+  labels:
+    app.kubernetes.io/name: plugin-registry
+    app.kubernetes.io/part-of: developer-hub
+  annotations:
+    # Roll out automatically when `oc start-build` produces a new image.
+    image.openshift.io/triggers: |
+      [{
+        "from": {"kind": "ImageStreamTag", "name": "plugin-registry:latest"},
+        "fieldPath": "spec.template.spec.containers[0].image"
+      }]
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: plugin-registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: plugin-registry
+        app.kubernetes.io/part-of: developer-hub
+    spec:
+      containers:
+        - name: httpd
+          # Replaced by the image trigger above; the placeholder is only what
+          # the Deployment starts life with.
+          image: plugin-registry:latest
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 15
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ['ALL']
+            seccompProfile:
+              type: RuntimeDefault
+---
+# The hostname RHDH uses: http://plugin-registry:8080/<file>.tgz in this
+# namespace, or http://plugin-registry.<rhdh-namespace>.svc.cluster.local:8080
+# from another one.
+apiVersion: v1
+kind: Service
+metadata:
+  name: plugin-registry
+  labels:
+    app.kubernetes.io/name: plugin-registry
+    app.kubernetes.io/part-of: developer-hub
+spec:
+  selector:
+    app.kubernetes.io/name: plugin-registry
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+---
+# Only needed if the namespace denies ingress by default. Narrow the podSelector
+# to the RHDH pod's labels if you want this tighter than namespace-wide.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: plugin-registry-allow-rhdh
+  labels:
+    app.kubernetes.io/name: plugin-registry
+    app.kubernetes.io/part-of: developer-hub
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: plugin-registry
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080

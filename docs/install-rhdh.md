@@ -12,6 +12,12 @@ Nothing here modifies the running RHDH image. The work is:
 4. grant the RHDH pod read/create access to Tekton in the pipeline namespaces,
 5. annotate the catalog entities that should get a Pipelines tab.
 
+Step 3 pushes an OCI image. For the alternative — pack each plugin with
+`npm pack` and serve the tarballs over HTTP from an httpd pod in the cluster,
+with no registry credentials or pull secret — follow
+[`host-http-plugin-registry.md`](host-http-plugin-registry.md) in place of
+steps 2 through 4, then come back here for steps 5 onward.
+
 ---
 
 ## 0. Prerequisites

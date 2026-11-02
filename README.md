@@ -121,6 +121,11 @@ For installing into an RHDH instance that is already running — exporting,
 packaging to OCI, the Helm and Operator config, cluster RBAC and verification —
 see [`docs/install-rhdh.md`](docs/install-rhdh.md).
 
+To host the exported plugins as `.tgz` artifacts served over HTTP from a pod in
+the cluster instead of pushing an OCI image — no registry credentials, no pull
+secret — see
+[`docs/host-http-plugin-registry.md`](docs/host-http-plugin-registry.md).
+
 ### 4. Cluster access
 
 ```bash
