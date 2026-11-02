@@ -110,15 +110,16 @@ yarn --cwd plugins/tekton-trigger export-dynamic
 yarn --cwd plugins/tekton-trigger-backend export-dynamic
 ```
 
-`export-dynamic` runs the RHDH packaging CLI. Newer RHDH releases ship it as
-`@red-hat-developer-hub/cli`:
-
-```bash
-npx @red-hat-developer-hub/cli@latest plugin export
-```
+`export-dynamic` calls the RHDH packaging CLI, `@red-hat-developer-hub/cli`, and
+embeds the shared `-common` package. Pin the CLI to the version that matches
+your RHDH release instead of `@latest` for a production export.
 
 Mount-point configuration is in
 [`examples/app-config.dynamic-plugins.yaml`](examples/app-config.dynamic-plugins.yaml).
+
+For installing into an RHDH instance that is already running — exporting,
+packaging to OCI, the Helm and Operator config, cluster RBAC and verification —
+see [`docs/install-rhdh.md`](docs/install-rhdh.md).
 
 ### 4. Cluster access
 
