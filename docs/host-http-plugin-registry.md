@@ -32,9 +32,8 @@ requirements — no `podman` and no push rights are needed. Still required:
 - RHDH on a Backstage ≥ 1.39 base (this repo is pinned to 1.42 in
   `backstage.json`); the backend uses `coreServices.permissionsRegistry`.
 - OpenShift Pipelines ≥ 1.11, for the `tekton.dev/v1` API.
-- **Node 20 or 22** on the build host, plus yarn. Node 26 cannot build
-  `better-sqlite3`, which `@backstage/backend-test-utils` pulls in, so
-  `yarn install` fails outright.
+- **Node 20 or newer** on the build host, plus yarn. No native toolchain is
+  needed: nothing in the tree compiles from source.
 - `oc` logged in with rights to create builds in the RHDH namespace.
 - An RHDH CLI version matching your RHDH release.
 

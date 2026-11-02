@@ -1,10 +1,16 @@
 import express from 'express';
 import request from 'supertest';
-import { MiddlewareFactory } from '@backstage/backend-defaults/rootHttpRouter';
-import { mockCredentials, mockServices } from '@backstage/backend-test-utils';
+import {
+  errorHandler,
+  mockAuth,
+  mockHttpAuth,
+  mockLogger,
+  mockPermissions,
+  mockRootConfig,
+  mockUserCredentials,
+} from './testMocks';
 import { catalogServiceMock } from '@backstage/plugin-catalog-node/testUtils';
 import { Entity } from '@backstage/catalog-model';
-import { AuthorizeResult } from '@backstage/plugin-permission-common';
 import { createRouter } from './router';
 import { TektonApiClient } from './TektonApiClient';
 import { EventListenerClient } from './EventListenerClient';
@@ -59,28 +65,26 @@ const eventListenerEntity: Entity = {
   spec: { type: 'website', lifecycle: 'production', owner: 'team-a' },
 };
 
-const config = mockServices.rootConfig({
-  data: {
-    tektonTrigger: {
-      defaultCluster: 'ocp-dev',
-      clusters: [
-        {
-          name: 'ocp-dev',
-          url: 'https://api.ocp-dev.example.com:6443',
-          serviceAccountToken: 'token',
-          dashboardUrl: 'https://console.apps.ocp-dev.example.com',
-          allowedNamespaces: ['cdops-ci'],
-        },
-      ],
-      eventListeners: [
-        {
-          name: 'cdops-el',
-          url: 'https://el-cdops.apps.ocp-dev.example.com',
-          secret: 'shhh',
-        },
-      ],
-      pipelineRun: { serviceAccountName: 'pipeline', timeout: '30m0s' },
-    },
+const config = mockRootConfig({
+  tektonTrigger: {
+    defaultCluster: 'ocp-dev',
+    clusters: [
+      {
+        name: 'ocp-dev',
+        url: 'https://api.ocp-dev.example.com:6443',
+        serviceAccountToken: 'token',
+        dashboardUrl: 'https://console.apps.ocp-dev.example.com',
+        allowedNamespaces: ['cdops-ci'],
+      },
+    ],
+    eventListeners: [
+      {
+        name: 'cdops-el',
+        url: 'https://el-cdops.apps.ocp-dev.example.com',
+        secret: 'shhh',
+      },
+    ],
+    pipelineRun: { serviceAccountName: 'pipeline', timeout: '30m0s' },
   },
 });
 
@@ -142,21 +146,13 @@ async function buildApp(
     ...options.eventListenerClient,
   } as unknown as EventListenerClient;
 
-  const permissions =
-    options.allow === false
-      ? mockServices.permissions.mock({
-          authorize: async reqs =>
-            reqs.map(() => ({ result: AuthorizeResult.DENY })),
-        })
-      : mockServices.permissions();
+  const permissions = mockPermissions(options.allow !== false);
 
   const router = await createRouter({
-    logger: mockServices.logger.mock(),
+    logger: mockLogger(),
     config,
-    auth: mockServices.auth(),
-    httpAuth: mockServices.httpAuth({
-      defaultCredentials: mockCredentials.user('user:default/jay'),
-    }),
+    auth: mockAuth(),
+    httpAuth: mockHttpAuth(mockUserCredentials('user:default/jay')),
     permissions,
     catalog: catalogServiceMock({
       entities: options.entities ?? [entity, bareEntity, eventListenerEntity],
@@ -165,14 +161,7 @@ async function buildApp(
     eventListenerClient,
   });
 
-  const app = express()
-    .use(router)
-    .use(
-      MiddlewareFactory.create({
-        config,
-        logger: mockServices.rootLogger.mock(),
-      }).error(),
-    );
+  const app = express().use(router).use(errorHandler());
 
   return { app, client, eventListenerClient };
 }

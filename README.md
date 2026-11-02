@@ -251,8 +251,12 @@ yarn build
 yarn --cwd plugins/tekton-trigger start   # standalone dev app for the frontend
 ```
 
-Use Node 20 or 22. `@backstage/backend-test-utils` pulls in `better-sqlite3`,
-whose native build does not yet compile on Node 26.
+Node 20 or newer. Nothing in the dependency tree needs a native toolchain —
+no compiler, Python or `node-gyp` on the build host. The backend tests use the
+local service stubs in `plugins/tekton-trigger-backend/src/service/testMocks.ts`
+rather than `@backstage/backend-test-utils`, which would drag in
+`better-sqlite3` and (via testcontainers) `cpu-features`, both of which build
+from source.
 
 The frontend dev app renders the entity tab against a mock entity. For the
 backend, point `app-config.local.yaml` at a cluster and run the backend of a
