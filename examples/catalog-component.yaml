@@ -1,14 +1,28 @@
 # Entity annotations the plugin reads. The backend resolves every request
 # against the catalog, so these annotations - not the client - decide which
-# pipeline an entity can run.
+# ArgoCD application an entity shows and which pipeline it can run.
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: policy-api
   description: Policy administration API
   annotations:
-    # Required: the Tekton Pipeline to run.
-    tekton.dev/pipeline: build-and-deploy
+    # --- ArgoCD: what the card shows -------------------------------------
+    # Required: the ArgoCD Application whose deployed state the card shows.
+    # These are the same annotations the Roadie ArgoCD plugins use.
+    argocd/app-name: policy-api-prod
+
+    # Optional: which argocd.appLocatorMethods instance holds it. Without it
+    # every configured instance is searched.
+    argocd/instance-name: main
+
+    # Optional: needed when the Application's repository is project-scoped,
+    # otherwise ArgoCD refuses to list its git refs.
+    argocd/project-name: policy
+
+    # --- Tekton: what the deploy button runs ------------------------------
+    # Required: the Tekton Pipeline that updates the deployed version.
+    tekton.dev/pipeline: deploy-version
 
     # Required: namespace holding the pipeline.
     # backstage.io/kubernetes-namespace is used as a fallback.
@@ -20,12 +34,18 @@ metadata:
     # Optional: ServiceAccount the TaskRuns run as.
     tekton.dev/service-account: pipeline
 
-    # Optional: parameter values pinned by the catalog. Users see them in the
-    # dialog but cannot change them, and the backend rejects any attempt to.
+    # Optional: the pipeline parameter that carries the picked git version.
+    # Defaults to tektonTrigger.deploy.versionParam. The pipeline must declare
+    # it, or the deploy is rejected rather than running a pipeline that would
+    # ignore the choice.
+    tekton.dev/version-param: git-revision
+
+    # Optional: parameter values pinned by the catalog. The backend rejects any
+    # attempt to override these, and the version parameter may not appear here.
     tekton.dev/params: |
       {
-        "git-url": "https://github.com/cdops/policy-api",
-        "image": "image-registry.openshift-image-registry.svc:5000/cdops-ci/policy-api"
+        "git-url": "https://github.com/cdops/policy-api-gitops",
+        "values-file": "environments/prod/values.yaml"
       }
 
     # Optional: workspace bindings passed straight through to spec.workspaces.
@@ -46,18 +66,38 @@ spec:
   lifecycle: production
   owner: team-underwriting
 ---
-# Alternative: go through Tekton Triggers instead of creating PipelineRuns.
-# The EventListener's TriggerTemplate decides what actually runs.
+# One component deployed as several ArgoCD Applications: the card gets an
+# application picker, and the deploy button acts on the picked one.
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: claims-ui
   annotations:
-    tekton.dev/event-listener: cdops-el
+    argocd/app-selector: app.kubernetes.io/instance=claims-ui
+    # The pipeline takes the application name too, so one pipeline can deploy
+    # whichever environment the user picked.
+    tekton.dev/app-param: argocd-app
+    tekton.dev/pipeline: deploy-version
     tekton.dev/namespace: cdops-ci
-    # Still useful: lets the UI list the runs the EventListener creates.
-    tekton.dev/pipeline: build-and-deploy
 spec:
   type: website
   lifecycle: production
   owner: team-claims
+---
+# Alternative: go through Tekton Triggers instead of creating PipelineRuns.
+# The EventListener's TriggerTemplate decides what actually runs; the picked
+# version and application arrive in the request payload's `params`.
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: billing-api
+  annotations:
+    argocd/app-name: billing-api-prod
+    tekton.dev/event-listener: cdops-el
+    tekton.dev/namespace: cdops-ci
+    # Still useful: lets the card list the runs the EventListener creates.
+    tekton.dev/pipeline: deploy-version
+spec:
+  type: service
+  lifecycle: production
+  owner: team-billing

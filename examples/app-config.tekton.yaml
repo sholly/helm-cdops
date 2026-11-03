@@ -51,10 +51,42 @@ tektonTrigger:
     annotations:
       cdops.com/triggered-from: developer-hub
 
+  # How a version picked in the ArgoCD card reaches the pipeline.
+  deploy:
+    # The pipeline must declare this parameter. The plugin sets it to the
+    # picked git version; the pipeline is what writes that version into the
+    # manifests ArgoCD watches. Per entity: tekton.dev/version-param.
+    versionParam: git-revision
+    # Passed only when the pipeline declares it, so a pipeline that handles
+    # one application does not have to take it.
+    appParam: argocd-app
+    # Which refs the dropdown offers, newest first.
+    includeTags: true
+    includeBranches: true
+    # Optional: hide pre-releases and anything that is not a release tag.
+    tagPattern: '^v\d+\.\d+\.\d+$'
+    maxVersions: 50
+
   # Runs listed per entity.
   maxRuns: 20
 
-# Optional: gate triggering behind the permission framework. Without a policy
-# every authenticated user who can see the entity may trigger its pipeline.
+# ArgoCD access. This is the Roadie ArgoCD config shape, read through
+# argocdServiceRef: if the Roadie ArgoCD plugins are already installed, this
+# plugin reuses their instances and needs nothing extra here.
+argocd:
+  appLocatorMethods:
+    - type: config
+      instances:
+        - name: main
+          url: https://argocd.apps.ocp-dev.example.com
+          # Either a long-lived API token for a local ArgoCD account...
+          token: ${ARGOCD_MAIN_TOKEN}
+          # ...or username/password, which the service exchanges for a session
+          # token per request:
+          # username: ${ARGOCD_MAIN_USERNAME}
+          # password: ${ARGOCD_MAIN_PASSWORD}
+
+# Optional: gate reading and deploying behind the permission framework. Without
+# a policy every authenticated user who can see the entity may deploy it.
 permission:
   enabled: true

@@ -93,6 +93,40 @@ export interface Config {
       annotations?: { [key: string]: string };
     };
 
+    /**
+     * How a git version picked in the ArgoCD card reaches the pipeline.
+     */
+    deploy?: {
+      /**
+       * Pipeline parameter carrying the git version to deploy. The pipeline
+       * must declare it. Overridden per entity by `tekton.dev/version-param`.
+       * Defaults to `git-revision`.
+       */
+      versionParam?: string;
+
+      /**
+       * Pipeline parameter carrying the ArgoCD application name. Only passed
+       * when the pipeline declares it. Overridden per entity by
+       * `tekton.dev/app-param`. Defaults to `argocd-app`.
+       */
+      appParam?: string;
+
+      /** Offer git branches in the version dropdown. Defaults to true. */
+      includeBranches?: boolean;
+
+      /** Offer git tags in the version dropdown. Defaults to true. */
+      includeTags?: boolean;
+
+      /**
+       * Regular expression a tag must match to be offered, e.g.
+       * `^v\\d+\\.\\d+\\.\\d+$` to hide pre-releases.
+       */
+      tagPattern?: string;
+
+      /** Maximum entries in the version dropdown, newest first. Defaults to 50. */
+      maxVersions?: number;
+    };
+
     /** Maximum number of PipelineRuns returned per entity. Defaults to 20. */
     maxRuns?: number;
   };

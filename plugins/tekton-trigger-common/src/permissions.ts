@@ -18,8 +18,15 @@ export const tektonPipelineCancelPermission = createPermission({
   attributes: { action: 'update' },
 });
 
+/** Allows reading the deployed state of an entity's ArgoCD applications. */
+export const argocdApplicationReadPermission = createPermission({
+  name: 'argocd.application.read',
+  attributes: { action: 'read' },
+});
+
 export const tektonTriggerPermissions = [
   tektonPipelineReadPermission,
   tektonPipelineTriggerPermission,
   tektonPipelineCancelPermission,
+  argocdApplicationReadPermission,
 ];

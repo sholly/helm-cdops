@@ -1697,7 +1697,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@backstage/backend-plugin-api@npm:^1.11.0, @backstage/backend-plugin-api@npm:^1.4.1, @backstage/backend-plugin-api@npm:^1.6.0, @backstage/backend-plugin-api@npm:^1.9.0":
+"@backstage/backend-plugin-api@npm:^1.10.1, @backstage/backend-plugin-api@npm:^1.11.0, @backstage/backend-plugin-api@npm:^1.4.1, @backstage/backend-plugin-api@npm:^1.6.0, @backstage/backend-plugin-api@npm:^1.9.0":
   version: 1.11.0
   resolution: "@backstage/backend-plugin-api@npm:1.11.0"
   dependencies:
@@ -1944,7 +1944,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@backstage/config@npm:^1.3.10, @backstage/config@npm:^1.3.3, @backstage/config@npm:^1.3.6, @backstage/config@npm:^1.3.7":
+"@backstage/config@npm:^1.3.10, @backstage/config@npm:^1.3.3, @backstage/config@npm:^1.3.6, @backstage/config@npm:^1.3.7, @backstage/config@npm:^1.3.9":
   version: 1.3.10
   resolution: "@backstage/config@npm:1.3.10"
   dependencies:
@@ -2864,6 +2864,7 @@ __metadata:
     "@backstage/plugin-catalog-node": "npm:^1.17.2"
     "@backstage/plugin-permission-common": "npm:^0.9.0"
     "@cdops/plugin-tekton-trigger-common": "npm:^0.1.0"
+    "@roadiehq/backstage-plugin-argo-cd-node": "npm:^2.2.0"
     "@types/express": "npm:^4.17.21"
     "@types/node-fetch": "npm:^2.6.12"
     "@types/supertest": "npm:^6.0.2"
@@ -2911,6 +2912,7 @@ __metadata:
     react-dom: "npm:^18.3.1"
     react-router-dom: "npm:^6.28.0"
     react-use: "npm:^17.6.0"
+    swr: "npm:^2.0.0"
   peerDependencies:
     react: ^17.0.0 || ^18.0.0
     react-router-dom: ^6.0.0
@@ -5378,6 +5380,17 @@ __metadata:
   peerDependencies:
     react: ">=18.2.0"
   checksum: 10c0/edf4bb4f600e13ee24dac2cecb389b4bfe83764a5168b553b726b41d6b76bc8c24212f2e4f7d89abae395ba8479082646a122a2a066cd5c743e4e372e0a3c345
+  languageName: node
+  linkType: hard
+
+"@roadiehq/backstage-plugin-argo-cd-node@npm:^2.2.0":
+  version: 2.2.0
+  resolution: "@roadiehq/backstage-plugin-argo-cd-node@npm:2.2.0"
+  dependencies:
+    "@backstage/backend-plugin-api": "npm:^1.10.1"
+    "@backstage/config": "npm:^1.3.9"
+    cross-fetch: "npm:^3.1.4"
+  checksum: 10c0/f71242a71fc55b9fd170ba52aef9e1c8708d1b46cac72e1bc199712617d331003841084552676b1178e8cb8160361601bbf94cf1fed6befe76b793a8d6954eb7
   languageName: node
   linkType: hard
 
@@ -9132,6 +9145,15 @@ __metadata:
   dependencies:
     luxon: "npm:^3.2.1"
   checksum: 10c0/348622bdcd1a15695b61fc33af8a60133e5913a85cf99f6344367579e7002896514ba3b0a9d6bb569b02667d6b06836722bf2295fcd101b3de378f71d37bed0b
+  languageName: node
+  linkType: hard
+
+"cross-fetch@npm:^3.1.4":
+  version: 3.2.0
+  resolution: "cross-fetch@npm:3.2.0"
+  dependencies:
+    node-fetch: "npm:^2.7.0"
+  checksum: 10c0/d8596adf0269130098a676f6739a0922f3cc7b71cc89729925411ebe851a87026171c82ea89154c4811c9867c01c44793205a52e618ce2684650218c7fbeeb9f
   languageName: node
   linkType: hard
 

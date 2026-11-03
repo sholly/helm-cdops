@@ -12,12 +12,20 @@ import { CatalogService } from '@backstage/plugin-catalog-node';
 import { Entity, parseEntityRef } from '@backstage/catalog-model';
 import { InputError, NotAllowedError, NotFoundError } from '@backstage/errors';
 import { AuthorizeResult } from '@backstage/plugin-permission-common';
+import { ArgoServiceApi } from '@roadiehq/backstage-plugin-argo-cd-node';
 import {
+  ArgoApplicationSummary,
+  argocdApplicationReadPermission,
+  ArgoDeployedState,
+  ListGitVersionsResponse,
   ListPipelineRunsResponse,
   PipelineRunSummary,
+  TEKTON_APP_PARAM_ANNOTATION,
+  TEKTON_VERSION_PARAM_ANNOTATION,
   tektonPipelineCancelPermission,
   tektonPipelineReadPermission,
   tektonPipelineTriggerPermission,
+  TektonParamSpec,
   TektonTarget,
   TriggerPipelineResponse,
 } from '@cdops/plugin-tekton-trigger-common';
@@ -28,6 +36,7 @@ import {
 } from './config';
 import { TektonApiClient } from './TektonApiClient';
 import { EventListenerClient } from './EventListenerClient';
+import { ArgoApplicationService } from './ArgoApplicationService';
 import { buildPipelineRun, resolveParams } from './buildPipelineRun';
 import {
   byNewestFirst,
@@ -38,6 +47,12 @@ import {
 } from './mappers';
 import { TEKTON_PIPELINE_LABEL } from './labels';
 import { isTektonEntity, ResolvedTarget, resolveTarget } from './target';
+import {
+  argoUnconfiguredReason,
+  ArgoTarget,
+  isArgoEntity,
+  resolveArgoTarget,
+} from './argoTarget';
 import { TektonParamValue } from './tektonTypes';
 
 export interface RouterOptions {
@@ -47,10 +62,14 @@ export interface RouterOptions {
   httpAuth: HttpAuthService;
   permissions: PermissionsService;
   catalog: CatalogService;
+  /** Roadie ArgoCD service, injected from `argocdServiceRef`. */
+  argocd: ArgoServiceApi;
   /** Overridden in tests. */
   clientFactory?: (cluster: ClusterConfig) => TektonApiClient;
   /** Overridden in tests. */
   eventListenerClient?: EventListenerClient;
+  /** Overridden in tests. */
+  argoService?: ArgoApplicationService;
 }
 
 export async function createRouter(
@@ -84,12 +103,17 @@ export async function createRouter(
   const eventListenerClient =
     options.eventListenerClient ?? new EventListenerClient(logger);
 
+  const argoService =
+    options.argoService ??
+    new ArgoApplicationService(options.argocd, logger, tektonConfig.deploy);
+
   const authorize = async (
     request: express.Request,
     permission:
       | typeof tektonPipelineReadPermission
       | typeof tektonPipelineTriggerPermission
-      | typeof tektonPipelineCancelPermission,
+      | typeof tektonPipelineCancelPermission
+      | typeof argocdApplicationReadPermission,
   ): Promise<BackstageCredentials> => {
     const credentials = await httpAuth.credentials(request, {
       allow: ['user', 'service'],
@@ -155,8 +179,311 @@ export async function createRouter(
       .slice(0, tektonConfig.maxRuns);
   };
 
+  /**
+   * Picks the application a request is about. The card deploys one application
+   * at a time, so a request naming none is only unambiguous when the entity
+   * resolves to exactly one.
+   */
+  const selectApp = (
+    apps: ArgoApplicationSummary[],
+    entityRef: string,
+    requested?: unknown,
+  ): ArgoApplicationSummary => {
+    if (!apps.length) {
+      throw new NotFoundError(`No ArgoCD application found for ${entityRef}`);
+    }
+
+    if (requested === undefined || requested === null || requested === '') {
+      if (apps.length > 1) {
+        throw new InputError(
+          `${entityRef} resolves to ${apps.length} ArgoCD applications (${apps
+            .map(app => app.name)
+            .join(', ')}); name one with the 'app' parameter`,
+        );
+      }
+      return apps[0];
+    }
+
+    if (typeof requested !== 'string') {
+      throw new InputError('app must be a string');
+    }
+
+    // Only applications the catalog associates with the entity are reachable.
+    const app = apps.find(candidate => candidate.name === requested);
+    if (!app) {
+      throw new NotFoundError(
+        `ArgoCD application '${requested}' is not one of ${entityRef}'s applications`,
+      );
+    }
+    return app;
+  };
+
+  /**
+   * Turns the picked version into pipeline parameters.
+   *
+   * The version reaches the pipeline through a parameter the pipeline itself
+   * declares, so an entity whose pipeline takes no such parameter is rejected
+   * here rather than silently running a pipeline that ignores the choice.
+   */
+  const deployParams = (args: {
+    specs: TektonParamSpec[];
+    entity: Entity;
+    target: ResolvedTarget;
+    app: ArgoApplicationSummary;
+    version: string;
+    supplied: Record<string, TektonParamValue>;
+    /** EventListener payloads are not validated against a pipeline spec. */
+    validateAgainstSpecs: boolean;
+  }): Record<string, TektonParamValue> => {
+    const annotations = args.entity.metadata.annotations ?? {};
+    const versionParam =
+      annotations[TEKTON_VERSION_PARAM_ANNOTATION] ??
+      tektonConfig.deploy.versionParam;
+    const appParam =
+      annotations[TEKTON_APP_PARAM_ANNOTATION] ?? tektonConfig.deploy.appParam;
+
+    if (
+      Object.prototype.hasOwnProperty.call(
+        args.target.fixedParams,
+        versionParam,
+      )
+    ) {
+      throw new InputError(
+        `Parameter '${versionParam}' carries the deployed version but is pinned by the catalog; remove it from the tekton.dev/params annotation`,
+      );
+    }
+
+    if (
+      args.validateAgainstSpecs &&
+      !args.specs.some(spec => spec.name === versionParam)
+    ) {
+      throw new InputError(
+        `Pipeline '${args.target.pipeline}' does not declare a parameter named '${versionParam}'; set tekton.dev/version-param or tektonTrigger.deploy.versionParam to the parameter that carries the git version`,
+      );
+    }
+
+    const params: Record<string, TektonParamValue> = {
+      ...args.supplied,
+      [versionParam]: args.version,
+    };
+
+    // The application name is optional: only pass it when the pipeline asks
+    // for it and the catalog has not pinned it.
+    const appParamWanted = args.validateAgainstSpecs
+      ? args.specs.some(spec => spec.name === appParam)
+      : true;
+    if (
+      appParamWanted &&
+      !Object.prototype.hasOwnProperty.call(args.target.fixedParams, appParam)
+    ) {
+      params[appParam] = args.app.name;
+    }
+
+    return params;
+  };
+
+  /** Shared by the plain trigger route and the deploy route. */
+  const trigger = async (args: {
+    entity: Entity;
+    target: ResolvedTarget;
+    triggeredBy?: string;
+    /** Caller-supplied values; the catalog's fixed params still win. */
+    supplied: Record<string, TektonParamValue>;
+    /** Set by the deploy route to inject the version parameter. */
+    withParams?: (
+      specs: TektonParamSpec[],
+      validateAgainstSpecs: boolean,
+    ) => Record<string, TektonParamValue>;
+  }): Promise<{ status: number; body: TriggerPipelineResponse }> => {
+    const { entity: _entity, target, triggeredBy } = args;
+
+    if (target.mode === 'eventListener') {
+      const supplied = args.withParams
+        ? args.withParams([], false)
+        : args.supplied;
+
+      const result = await eventListenerClient.send(target.eventListener!, {
+        source: 'backstage-tekton-trigger',
+        entityRef: target.entityRef,
+        pipeline: target.pipeline,
+        namespace: target.namespace,
+        triggeredBy,
+        params: { ...supplied, ...target.fixedParams },
+      });
+
+      return {
+        status: 202,
+        body: { mode: 'eventListener', eventListener: result },
+      };
+    }
+
+    const client = getClient(target.cluster!);
+    const pipeline = await client.getPipeline(
+      target.namespace!,
+      target.pipeline!,
+    );
+    const specs = toParamSpecs(pipeline, target.fixedParams);
+
+    const supplied = args.withParams
+      ? args.withParams(specs, true)
+      : args.supplied;
+
+    const params = resolveParams({
+      specs,
+      supplied,
+      fixed: target.fixedParams,
+    });
+
+    const created = await client.createPipelineRun(
+      target.namespace!,
+      buildPipelineRun({
+        target,
+        params,
+        userEntityRef: triggeredBy,
+        defaults: tektonConfig.pipelineRun,
+      }),
+    );
+
+    logger.info(
+      `Created PipelineRun ${target.namespace}/${created.metadata.name} from pipeline '${target.pipeline}' on cluster '${target.cluster!.name}' for ${target.entityRef}${
+        triggeredBy ? ` (triggered by ${triggeredBy})` : ''
+      }`,
+    );
+
+    return {
+      status: 201,
+      body: {
+        mode: 'pipelineRun',
+        pipelineRun: toPipelineRunSummary(created, target.cluster),
+      },
+    };
+  };
+
   const router = Router();
   router.use(express.json());
+
+  /**
+   * Deployed state of the entity's ArgoCD applications. This is what the card
+   * leads with, so it answers with `unconfiguredReason` rather than an error
+   * when the entity is not wired up.
+   */
+  router.get('/argocd/application', async (request, response) => {
+    const credentials = await authorize(
+      request,
+      argocdApplicationReadPermission,
+    );
+    const entity = await readEntity(request, credentials);
+
+    const unconfiguredReason = argoUnconfiguredReason(entity);
+    if (unconfiguredReason) {
+      response.json({ apps: [], unconfiguredReason } as ArgoDeployedState);
+      return;
+    }
+
+    const target = resolveArgoTarget(entity);
+    const apps = await argoService.getApplications(target);
+
+    response.json({
+      apps,
+      unconfiguredReason: apps.length
+        ? undefined
+        : `No ArgoCD application matched ${describeArgoTarget(target)}.`,
+    } as ArgoDeployedState);
+  });
+
+  /** Git versions the entity can be deployed at, for the card's dropdown. */
+  router.get('/argocd/versions', async (request, response) => {
+    const credentials = await authorize(
+      request,
+      argocdApplicationReadPermission,
+    );
+    const entity = await readEntity(request, credentials);
+
+    if (!isArgoEntity(entity)) {
+      response.json({
+        items: [],
+        unavailableReason: argoUnconfiguredReason(entity),
+      } as ListGitVersionsResponse);
+      return;
+    }
+
+    const target = resolveArgoTarget(entity);
+    const apps = await argoService.getApplications(target);
+    const app = selectApp(apps, target.entityRef, request.query.app);
+
+    if (!app.repoUrl) {
+      response.json({
+        items: [],
+        unavailableReason: `ArgoCD application '${app.name}' has no source repository to list versions from.`,
+      } as ListGitVersionsResponse);
+      return;
+    }
+
+    response.json({
+      items: await argoService.listVersions(target, app),
+      repoUrl: app.repoUrl,
+    } as ListGitVersionsResponse);
+  });
+
+  /**
+   * Deploy: runs the entity's pipeline with the picked git version, which is
+   * what updates the version ArgoCD has deployed.
+   */
+  router.post('/deploy', async (request, response) => {
+    const credentials = await authorize(
+      request,
+      tektonPipelineTriggerPermission,
+    );
+    const entity = await readEntity(request, credentials);
+
+    const version = request.body?.version;
+    if (typeof version !== 'string' || !version) {
+      throw new InputError('Missing version');
+    }
+
+    if (!isArgoEntity(entity)) {
+      throw new InputError(
+        argoUnconfiguredReason(entity) ?? 'Entity has no ArgoCD application',
+      );
+    }
+
+    const argoTarget = resolveArgoTarget(entity);
+    const apps = await argoService.getApplications(argoTarget);
+    const app = selectApp(apps, argoTarget.entityRef, request.body?.app);
+
+    // The dropdown is a convenience, not the authority: re-check the version
+    // against ArgoCD so a crafted request cannot reach an arbitrary ref.
+    await argoService.assertVersionAllowed(argoTarget, app, version);
+
+    const target = resolveTarget(entity, tektonConfig);
+    const triggeredBy = userEntityRef(credentials);
+    const supplied = readSuppliedParams(request.body?.params);
+
+    const { status, body } = await trigger({
+      entity,
+      target,
+      triggeredBy,
+      supplied,
+      withParams: (specs, validateAgainstSpecs) =>
+        deployParams({
+          specs,
+          entity,
+          target,
+          app,
+          version,
+          supplied,
+          validateAgainstSpecs,
+        }),
+    });
+
+    logger.info(
+      `Deploying ${app.name} at '${version}' for ${target.entityRef}${
+        triggeredBy ? ` (requested by ${triggeredBy})` : ''
+      }`,
+    );
+
+    response.status(status).json(body);
+  });
 
   /**
    * What the entity can run, including the pipeline's declared parameters so
@@ -266,61 +593,15 @@ export async function createRouter(
     );
     const entity = await readEntity(request, credentials);
     const target = resolveTarget(entity, tektonConfig);
-    const triggeredBy = userEntityRef(credentials);
 
-    const supplied = readSuppliedParams(request.body?.params);
-
-    if (target.mode === 'eventListener') {
-      const result = await eventListenerClient.send(target.eventListener!, {
-        source: 'backstage-tekton-trigger',
-        entityRef: target.entityRef,
-        pipeline: target.pipeline,
-        namespace: target.namespace,
-        triggeredBy,
-        params: { ...supplied, ...target.fixedParams },
-      });
-
-      const body: TriggerPipelineResponse = {
-        mode: 'eventListener',
-        eventListener: result,
-      };
-      response.status(202).json(body);
-      return;
-    }
-
-    const client = getClient(target.cluster!);
-    const pipeline = await client.getPipeline(
-      target.namespace!,
-      target.pipeline!,
-    );
-
-    const params = resolveParams({
-      specs: toParamSpecs(pipeline, target.fixedParams),
-      supplied,
-      fixed: target.fixedParams,
+    const { status, body } = await trigger({
+      entity,
+      target,
+      triggeredBy: userEntityRef(credentials),
+      supplied: readSuppliedParams(request.body?.params),
     });
 
-    const created = await client.createPipelineRun(
-      target.namespace!,
-      buildPipelineRun({
-        target,
-        params,
-        userEntityRef: triggeredBy,
-        defaults: tektonConfig.pipelineRun,
-      }),
-    );
-
-    logger.info(
-      `Created PipelineRun ${target.namespace}/${created.metadata.name} from pipeline '${target.pipeline}' on cluster '${target.cluster!.name}' for ${target.entityRef}${
-        triggeredBy ? ` (triggered by ${triggeredBy})` : ''
-      }`,
-    );
-
-    const body: TriggerPipelineResponse = {
-      mode: 'pipelineRun',
-      pipelineRun: toPipelineRunSummary(created, target.cluster),
-    };
-    response.status(201).json(body);
+    response.status(status).json(body);
   });
 
   router.post('/pipelineruns/:name/cancel', async (request, response) => {
@@ -356,6 +637,15 @@ export async function createRouter(
   });
 
   return router;
+}
+
+function describeArgoTarget(target: ArgoTarget): string {
+  const what = target.appName
+    ? `application '${target.appName}'`
+    : `selector '${target.appSelector}'`;
+  return target.instanceName
+    ? `${what} on instance '${target.instanceName}'`
+    : what;
 }
 
 /**
