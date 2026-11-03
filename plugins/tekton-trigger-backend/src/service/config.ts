@@ -9,6 +9,9 @@ const IN_CLUSTER_CA_FILE =
 export const DEFAULT_PIPELINE_TIMEOUT = '1h0m0s';
 export const DEFAULT_MAX_RUNS = 20;
 export const DEFAULT_SECRET_HEADER = 'X-Backstage-Token';
+export const DEFAULT_VERSION_PARAM = 'git-revision';
+export const DEFAULT_APP_PARAM = 'argocd-app';
+export const DEFAULT_MAX_VERSIONS = 50;
 
 export type DashboardType = 'openshift' | 'tekton';
 
@@ -41,11 +44,28 @@ export interface PipelineRunDefaults {
   annotations: Record<string, string>;
 }
 
+/** How a picked git version is turned into a pipeline run. */
+export interface DeployConfig {
+  /** Pipeline parameter carrying the version, unless the entity overrides it. */
+  versionParam: string;
+  /** Pipeline parameter carrying the ArgoCD application name, when declared. */
+  appParam: string;
+  /** Offer branches in the version dropdown. */
+  includeBranches: boolean;
+  /** Offer tags in the version dropdown. */
+  includeTags: boolean;
+  /** Only tags matching this pattern are offered. */
+  tagPattern?: RegExp;
+  /** Upper bound on dropdown entries, newest first. */
+  maxVersions: number;
+}
+
 export interface TektonTriggerConfig {
   defaultCluster?: string;
   clusters: ClusterConfig[];
   eventListeners: EventListenerConfig[];
   pipelineRun: PipelineRunDefaults;
+  deploy: DeployConfig;
   maxRuns: number;
 }
 
@@ -146,7 +166,34 @@ export function readTektonTriggerConfig(root: Config): TektonTriggerConfig {
       labels: readStringMap(pipelineRunConfig, 'labels'),
       annotations: readStringMap(pipelineRunConfig, 'annotations'),
     },
+    deploy: readDeployConfig(config?.getOptionalConfig('deploy')),
     maxRuns: config?.getOptionalNumber('maxRuns') ?? DEFAULT_MAX_RUNS,
+  };
+}
+
+function readDeployConfig(config: Config | undefined): DeployConfig {
+  const rawPattern = config?.getOptionalString('tagPattern');
+
+  let tagPattern: RegExp | undefined;
+  if (rawPattern) {
+    try {
+      tagPattern = new RegExp(rawPattern);
+    } catch (error) {
+      throw new InputError(
+        `tektonTrigger.deploy.tagPattern '${rawPattern}' is not a valid regular expression: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  return {
+    versionParam:
+      config?.getOptionalString('versionParam') ?? DEFAULT_VERSION_PARAM,
+    appParam: config?.getOptionalString('appParam') ?? DEFAULT_APP_PARAM,
+    includeBranches: config?.getOptionalBoolean('includeBranches') ?? true,
+    includeTags: config?.getOptionalBoolean('includeTags') ?? true,
+    tagPattern,
+    maxVersions:
+      config?.getOptionalNumber('maxVersions') ?? DEFAULT_MAX_VERSIONS,
   };
 }
 

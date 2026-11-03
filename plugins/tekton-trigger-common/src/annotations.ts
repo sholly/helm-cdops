@@ -36,3 +36,38 @@ export const TEKTON_WORKSPACES_ANNOTATION = 'tekton.dev/workspaces';
 /** Kubernetes namespace annotation used by the core Kubernetes plugin. */
 export const KUBERNETES_NAMESPACE_ANNOTATION =
   'backstage.io/kubernetes-namespace';
+
+/**
+ * ArgoCD annotations. These follow the convention established by the Roadie
+ * ArgoCD plugins, whose service this plugin uses to reach ArgoCD, so an entity
+ * already annotated for those plugins needs no extra annotations here.
+ */
+
+/** Name of the ArgoCD `Application`, e.g. `policy-api-prod`. */
+export const ARGOCD_APP_NAME_ANNOTATION = 'argocd/app-name';
+
+/**
+ * Label selector matching several ArgoCD `Application`s, e.g.
+ * `app.kubernetes.io/instance=policy-api`. Used when one component is deployed
+ * as more than one Application (per environment, say).
+ */
+export const ARGOCD_APP_SELECTOR_ANNOTATION = 'argocd/app-selector';
+
+/** Name of an entry in `argocd.appLocatorMethods[].instances`. */
+export const ARGOCD_INSTANCE_NAME_ANNOTATION = 'argocd/instance-name';
+
+/** ArgoCD project, required when the Application's repository is project-scoped. */
+export const ARGOCD_PROJECT_NAME_ANNOTATION = 'argocd/project-name';
+
+/**
+ * Name of the Tekton pipeline parameter that carries the git version being
+ * deployed. Defaults to `tektonTrigger.deploy.versionParam`.
+ */
+export const TEKTON_VERSION_PARAM_ANNOTATION = 'tekton.dev/version-param';
+
+/**
+ * Name of the Tekton pipeline parameter that carries the ArgoCD application
+ * name. Defaults to `tektonTrigger.deploy.appParam`. Only set when the
+ * pipeline declares it.
+ */
+export const TEKTON_APP_PARAM_ANNOTATION = 'tekton.dev/app-param';

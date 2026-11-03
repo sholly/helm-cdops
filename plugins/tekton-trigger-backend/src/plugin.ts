@@ -3,12 +3,17 @@ import {
   createBackendPlugin,
 } from '@backstage/backend-plugin-api';
 import { catalogServiceRef } from '@backstage/plugin-catalog-node';
+import { argocdServiceRef } from '@roadiehq/backstage-plugin-argo-cd-node';
 import { tektonTriggerPermissions } from '@cdops/plugin-tekton-trigger-common';
 import { createRouter } from './service/router';
 
 /**
- * Backend plugin that triggers OpenShift Pipelines (Tekton) for catalog
- * entities.
+ * Backend plugin that reports the deployed state of a catalog entity's ArgoCD
+ * applications and triggers the OpenShift Pipeline (Tekton) that changes the
+ * version ArgoCD deploys.
+ *
+ * ArgoCD access comes from `argocdServiceRef`, whose default factory reads the
+ * same `argocd.appLocatorMethods` config as the Roadie ArgoCD plugins.
  *
  * @public
  */
@@ -25,6 +30,7 @@ export const tektonTriggerPlugin = createBackendPlugin({
         permissions: coreServices.permissions,
         permissionsRegistry: coreServices.permissionsRegistry,
         catalog: catalogServiceRef,
+        argocd: argocdServiceRef,
       },
       async init({
         logger,
@@ -35,6 +41,7 @@ export const tektonTriggerPlugin = createBackendPlugin({
         permissions,
         permissionsRegistry,
         catalog,
+        argocd,
       }) {
         // Makes the permissions discoverable by the RBAC UI.
         permissionsRegistry.addPermissions(tektonTriggerPermissions);
@@ -47,6 +54,7 @@ export const tektonTriggerPlugin = createBackendPlugin({
             httpAuth,
             permissions,
             catalog,
+            argocd,
           }),
         );
       },

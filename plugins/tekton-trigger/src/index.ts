@@ -1,23 +1,28 @@
 /**
- * A Backstage / Red Hat Developer Hub plugin that triggers OpenShift Pipelines
- * (Tekton) for a catalog entity.
+ * A Backstage / Red Hat Developer Hub plugin that shows the deployed state of
+ * a catalog entity's ArgoCD application and deploys a picked git version by
+ * triggering an OpenShift Pipeline (Tekton).
  *
  * @packageDocumentation
  */
 export {
   tektonTriggerPlugin,
-  EntityTektonTriggerContent,
-  EntityTektonTriggerCard,
+  EntityArgoCdDeployCard,
+  isArgoCdDeployAvailable,
   isTektonTriggerAvailable,
 } from './plugin';
 export { tektonTriggerApiRef, TektonTriggerClient } from './api';
 export type { TektonTriggerApi } from './api';
-export { rootRouteRef } from './routes';
-export { TektonTriggerContent } from './components/TektonTriggerContent';
-export { TektonTriggerCard } from './components/TektonTriggerCard';
 export {
-  TriggerPipelineButton,
-  TriggerPipelineDialog,
-} from './components/TriggerPipelineDialog';
-export { PipelineRunsTable } from './components/PipelineRunsTable';
-export { usePipelineRuns, useTektonTarget } from './hooks';
+  ArgoCdDeployCard,
+  DeployControls,
+  DeployedState,
+  RecentPipelineRuns,
+} from './components/ArgoCdDeployCard';
+export { PipelineRunStatusIndicator } from './components/PipelineRunStatusIndicator';
+export {
+  useArgoApplication,
+  useGitVersions,
+  usePipelineRuns,
+  useTektonTarget,
+} from './hooks';

@@ -1,5 +1,8 @@
 import { createApiRef } from '@backstage/core-plugin-api';
 import {
+  ArgoDeployedState,
+  DeployRequest,
+  ListGitVersionsResponse,
   PipelineRunSummary,
   TektonTarget,
   TriggerPipelineRequest,
@@ -14,6 +17,24 @@ import {
  * @public
  */
 export interface TektonTriggerApi {
+  /** Deployed state of the entity's ArgoCD applications. */
+  getArgoApplication(entityRef: string): Promise<ArgoDeployedState>;
+
+  /**
+   * Git versions the entity can be deployed at. `app` is required when the
+   * entity resolves to more than one ArgoCD application.
+   */
+  listGitVersions(
+    entityRef: string,
+    app?: string,
+  ): Promise<ListGitVersionsResponse>;
+
+  /**
+   * Runs the entity's pipeline with the picked version, which is what updates
+   * the version ArgoCD has deployed.
+   */
+  deploy(request: DeployRequest): Promise<TriggerPipelineResponse>;
+
   /** What this entity can run, including the pipeline's declared parameters. */
   getTarget(entityRef: string): Promise<TektonTarget>;
 

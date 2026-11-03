@@ -5,24 +5,15 @@ dynamicPlugins:
   frontend:
     cdops.plugin-tekton-trigger:
       mountPoints:
-        - mountPoint: entity.page.ci/cards
-          importName: EntityTektonTriggerContent
-          config:
-            layout:
-              gridColumn: '1 / -1'
-            if:
-              anyOf:
-                - hasAnnotation: tekton.dev/pipeline
-                - hasAnnotation: tekton.dev/event-listener
         - mountPoint: entity.page.overview/cards
-          importName: EntityTektonTriggerCard
+          importName: EntityArgoCdDeployCard
           config:
             layout:
               gridColumnEnd:
-                lg: 'span 4'
-                md: 'span 6'
+                lg: 'span 6'
+                md: 'span 8'
                 xs: 'span 12'
             if:
               anyOf:
-                - hasAnnotation: tekton.dev/pipeline
-                - hasAnnotation: tekton.dev/event-listener
+                - hasAnnotation: argocd/app-name
+                - hasAnnotation: argocd/app-selector

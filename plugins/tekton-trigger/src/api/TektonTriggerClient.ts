@@ -1,6 +1,9 @@
 import { DiscoveryApi, FetchApi } from '@backstage/core-plugin-api';
 import { ResponseError } from '@backstage/errors';
 import {
+  ArgoDeployedState,
+  DeployRequest,
+  ListGitVersionsResponse,
   ListPipelineRunsResponse,
   PipelineRunSummary,
   TektonTarget,
@@ -17,6 +20,33 @@ export class TektonTriggerClient implements TektonTriggerApi {
   constructor(options: { discoveryApi: DiscoveryApi; fetchApi: FetchApi }) {
     this.discoveryApi = options.discoveryApi;
     this.fetchApi = options.fetchApi;
+  }
+
+  async getArgoApplication(entityRef: string): Promise<ArgoDeployedState> {
+    return await this.request<ArgoDeployedState>(
+      `/argocd/application?${new URLSearchParams({ entityRef })}`,
+    );
+  }
+
+  async listGitVersions(
+    entityRef: string,
+    app?: string,
+  ): Promise<ListGitVersionsResponse> {
+    const search = new URLSearchParams({ entityRef });
+    if (app) {
+      search.set('app', app);
+    }
+    return await this.request<ListGitVersionsResponse>(
+      `/argocd/versions?${search}`,
+    );
+  }
+
+  async deploy(request: DeployRequest): Promise<TriggerPipelineResponse> {
+    return await this.request<TriggerPipelineResponse>('/deploy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
   }
 
   async getTarget(entityRef: string): Promise<TektonTarget> {

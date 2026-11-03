@@ -10,7 +10,7 @@ Nothing here modifies the running RHDH image. The work is:
 2. push them to a registry as an OCI image,
 3. add them to RHDH's dynamic-plugins config,
 4. grant the RHDH pod read/create access to Tekton in the pipeline namespaces,
-5. annotate the catalog entities that should get a Pipelines tab.
+5. annotate the catalog entities that should get the ArgoCD deployment card.
 
 Step 3 pushes an OCI image. For the alternative — pack each plugin with
 `npm pack` and serve the tarballs over HTTP from an httpd pod in the cluster,
@@ -22,14 +22,14 @@ steps 2 through 4, then come back here for steps 5 onward.
 
 ## 0. Prerequisites
 
-| Requirement | Why | How to check |
-| --- | --- | --- |
-| RHDH on a Backstage ≥ 1.39 base | The backend uses `coreServices.permissionsRegistry`, added in Backstage 1.39. This repo is pinned to 1.42 (`backstage.json`). | `oc exec deploy/<rhdh> -- cat /opt/app-root/src/package.json \| grep backstage` or the version matrix for your RHDH release |
-| OpenShift Pipelines ≥ 1.11 | The plugin uses the `tekton.dev/v1` API. | `oc get csv -n openshift-operators \| grep pipelines` |
-| RHDH's RBAC plugin enabled (optional) | Needed only if you want the three permissions to show up in the RBAC UI. | `oc get cm dynamic-plugins-rhdh -o yaml \| grep rbac` |
-| Node 20 or newer + Yarn 4, on the build host | `@backstage/cli` and the RHDH CLI. Yarn 4 is pinned by `packageManager` and committed under `.yarn/releases`. No native toolchain needed — nothing in the tree compiles from source. | `node -v` |
-| `podman` (or `docker`/`buildah`) and push rights to a registry | Dynamic plugins are shipped as an OCI image. | `podman login quay.io` |
-| An RHDH CLI version matching your RHDH release | Command names and flags changed between `@janus-idp/cli` (RHDH ≤ 1.6) and `@red-hat-developer-hub/cli` (1.7+). | see [the RHDH version matrix](https://github.com/redhat-developer/rhdh/blob/main/docs/dynamic-plugins/versions.md) |
+| Requirement                                                    | Why                                                                                                                                                                                  | How to check                                                                                                                |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| RHDH on a Backstage ≥ 1.39 base                                | The backend uses `coreServices.permissionsRegistry`, added in Backstage 1.39. This repo is pinned to 1.42 (`backstage.json`).                                                        | `oc exec deploy/<rhdh> -- cat /opt/app-root/src/package.json \| grep backstage` or the version matrix for your RHDH release |
+| OpenShift Pipelines ≥ 1.11                                     | The plugin uses the `tekton.dev/v1` API.                                                                                                                                             | `oc get csv -n openshift-operators \| grep pipelines`                                                                       |
+| RHDH's RBAC plugin enabled (optional)                          | Needed only if you want the three permissions to show up in the RBAC UI.                                                                                                             | `oc get cm dynamic-plugins-rhdh -o yaml \| grep rbac`                                                                       |
+| Node 20 or newer + Yarn 4, on the build host                   | `@backstage/cli` and the RHDH CLI. Yarn 4 is pinned by `packageManager` and committed under `.yarn/releases`. No native toolchain needed — nothing in the tree compiles from source. | `node -v`                                                                                                                   |
+| `podman` (or `docker`/`buildah`) and push rights to a registry | Dynamic plugins are shipped as an OCI image.                                                                                                                                         | `podman login quay.io`                                                                                                      |
+| An RHDH CLI version matching your RHDH release                 | Command names and flags changed between `@janus-idp/cli` (RHDH ≤ 1.6) and `@red-hat-developer-hub/cli` (1.7+).                                                                       | see [the RHDH version matrix](https://github.com/redhat-developer/rhdh/blob/main/docs/dynamic-plugins/versions.md)          |
 
 > If your RHDH is older than the Backstage 1.39 baseline, the backend plugin
 > will fail to initialise (`coreServices.permissionsRegistry` is undefined).
@@ -248,6 +248,25 @@ plugins:
             app.kubernetes.io/part-of: developer-hub
           annotations:
             cdops.com/triggered-from: developer-hub
+        deploy:
+          # The pipeline must declare this parameter; the plugin sets it to the
+          # version picked in the card's dropdown.
+          versionParam: git-revision
+          appParam: argocd-app
+          includeTags: true
+          includeBranches: true
+          maxVersions: 50
+      # ArgoCD, in the Roadie config shape. A read-only account is enough: the
+      # plugin reads applications and lists repository refs, and never syncs.
+      # If the Roadie ArgoCD plugins are already installed in this RHDH, their
+      # argocd block is reused and this one can be omitted.
+      argocd:
+        appLocatorMethods:
+          - type: config
+            instances:
+              - name: main
+                url: https://argocd.apps.ocp-dev.example.com
+                token: ${ARGOCD_MAIN_TOKEN}
         maxRuns: 20
 
   # ---- frontend ----------------------------------------------------------
@@ -258,31 +277,22 @@ plugins:
         frontend:
           cdops.plugin-tekton-trigger:
             mountPoints:
-              # Entity "CI" tab — already part of RHDH's default entity page,
-              # no entityTabs entry needed.
-              - mountPoint: entity.page.ci/cards
-                importName: EntityTektonTriggerContent
-                # module: <name>   # only if you reintroduced a custom module name
-                config:
-                  layout:
-                    gridColumn: '1 / -1'
-                  if:
-                    anyOf:
-                      - hasAnnotation: tekton.dev/pipeline
-                      - hasAnnotation: tekton.dev/event-listener
+              # The ArgoCD deployment card is the plugin's only frontend
+              # extension. The overview page is already part of RHDH's default
+              # entity page, so no entityTabs entry is needed.
               - mountPoint: entity.page.overview/cards
-                importName: EntityTektonTriggerCard
+                importName: EntityArgoCdDeployCard
                 # module: <name>   # only if you reintroduced a custom module name
                 config:
                   layout:
                     gridColumnEnd:
-                      lg: 'span 4'
-                      md: 'span 6'
+                      lg: 'span 6'
+                      md: 'span 8'
                       xs: 'span 12'
                   if:
                     anyOf:
-                      - hasAnnotation: tekton.dev/pipeline
-                      - hasAnnotation: tekton.dev/event-listener
+                      - hasAnnotation: argocd/app-name
+                      - hasAnnotation: argocd/app-selector
 ```
 
 Notes on this block:
@@ -311,14 +321,14 @@ Notes on this block:
 global:
   dynamic:
     includes:
-      - dynamic-plugins.default.yaml    # keep RHDH's own defaults
+      - dynamic-plugins.default.yaml # keep RHDH's own defaults
     plugins:
       - package: oci://quay.io/<org>/cdops-tekton-trigger:0.1.0!cdops-plugin-tekton-trigger-backend-dynamic
         disabled: false
-        pluginConfig: { ... }           # as above
+        pluginConfig: { ... } # as above
       - package: oci://quay.io/<org>/cdops-tekton-trigger:0.1.0!cdops-plugin-tekton-trigger
         disabled: false
-        pluginConfig: { ... }           # as above
+        pluginConfig: { ... } # as above
 ```
 
 ```bash
@@ -435,11 +445,11 @@ The Role is least-privilege by design: `get`/`list` on `pipelines` and
 
 Choose **one** of these three credential modes per cluster entry:
 
-| Mode | Config | When |
-| --- | --- | --- |
-| Projected token (recommended) | omit `serviceAccountToken` and `serviceAccountTokenFile`; the plugin defaults to `/var/run/secrets/kubernetes.io/serviceaccount/token` and the CA at `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`, re-read per request | RHDH on the same cluster as the pipelines |
-| Static token | `serviceAccountToken: ${VAR}` from the `developer-hub-tekton-token` Secret, plus `caData` | remote cluster |
-| Mounted token file | `serviceAccountTokenFile: /path/to/token` | you project a second SA token into the pod yourself |
+| Mode                          | Config                                                                                                                                                                                                                           | When                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Projected token (recommended) | omit `serviceAccountToken` and `serviceAccountTokenFile`; the plugin defaults to `/var/run/secrets/kubernetes.io/serviceaccount/token` and the CA at `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`, re-read per request | RHDH on the same cluster as the pipelines           |
+| Static token                  | `serviceAccountToken: ${VAR}` from the `developer-hub-tekton-token` Secret, plus `caData`                                                                                                                                        | remote cluster                                      |
+| Mounted token file            | `serviceAccountTokenFile: /path/to/token`                                                                                                                                                                                        | you project a second SA token into the pod yourself |
 
 If you stay with the repo's separate `developer-hub-tekton` SA **and** want the
 projected-token mode, you must also change the RHDH pod's `serviceAccountName`
@@ -457,11 +467,11 @@ use that path).
 The backend registers three permissions with the permission registry, so RHDH's
 RBAC UI lists them once the plugin is loaded:
 
-| Permission | Guards |
-| --- | --- |
-| `tekton.pipeline.read` | reading the target and run history |
+| Permission                | Guards                                   |
+| ------------------------- | ---------------------------------------- |
+| `tekton.pipeline.read`    | reading the target and run history       |
 | `tekton.pipeline.trigger` | creating a run / firing an EventListener |
-| `tekton.pipeline.cancel` | cancelling a run |
+| `tekton.pipeline.cancel`  | cancelling a run                         |
 
 Without a policy, **every authenticated user who can see the entity can trigger
 its pipeline.** Turn the framework on:
@@ -489,22 +499,30 @@ permission is denied, and the backend enforces it regardless of the UI.
 
 ## 7. Annotate your entities
 
-No entity picks up the tab or card until it is annotated. The backend resolves
-cluster, namespace and pipeline from the **catalog entity**, never from the
-request body, so these annotations are the authorization boundary.
+No entity picks up the card until it is annotated. The backend resolves the
+ArgoCD application, cluster, namespace and pipeline from the **catalog
+entity**, never from the request body, so these annotations are the
+authorization boundary.
 
 ```yaml
 metadata:
   annotations:
-    tekton.dev/pipeline: build-and-deploy   # required (or tekton.dev/event-listener)
-    tekton.dev/namespace: cdops-ci          # required; falls back to backstage.io/kubernetes-namespace
-    tekton.dev/cluster: ocp-dev             # optional; falls back to defaultCluster
+    # what the card shows
+    argocd/app-name: policy-api-prod # required (or argocd/app-selector)
+    argocd/instance-name: main # optional; else all instances searched
+    argocd/project-name: policy # required if the repo is project-scoped
+    # what the deploy button runs
+    tekton.dev/pipeline: deploy-version # required (or tekton.dev/event-listener)
+    tekton.dev/namespace: cdops-ci # required; falls back to backstage.io/kubernetes-namespace
+    tekton.dev/cluster: ocp-dev # optional; falls back to defaultCluster
 ```
 
-Optional: `tekton.dev/service-account`, `tekton.dev/params` (JSON object of
-values pinned by the catalog — users see them but cannot override them, and the
-backend rejects attempts), `tekton.dev/workspaces` (JSON array passed through to
-`spec.workspaces`), `tekton.dev/event-listener`. Full examples in
+Optional: `tekton.dev/version-param` and `tekton.dev/app-param` (which pipeline
+parameters carry the picked version and the application name),
+`tekton.dev/service-account`, `tekton.dev/params` (JSON object of values pinned
+by the catalog — the backend rejects attempts to override them, and the version
+parameter may not appear there), `tekton.dev/workspaces` (JSON array passed
+through to `spec.workspaces`), `tekton.dev/event-listener`. Full examples in
 [`examples/catalog-component.yaml`](../examples/catalog-component.yaml).
 
 The namespace must appear in that cluster's `allowedNamespaces`, or the request
@@ -519,13 +537,13 @@ you put in `tektonTrigger.eventListeners[].secret`), and add the
 `eventListeners` block to the backend config:
 
 ```yaml
-      eventListeners:
-        - name: cdops-el
-          url: http://el-cdops-ci.cdops-ci.svc.cluster.local:8080
-          secret: ${TEKTON_EVENT_LISTENER_SECRET}
-          secretHeader: X-Backstage-Token
-          cluster: ocp-dev
-          namespace: cdops-ci
+eventListeners:
+  - name: cdops-el
+    url: http://el-cdops-ci.cdops-ci.svc.cluster.local:8080
+    secret: ${TEKTON_EVENT_LISTENER_SECRET}
+    secretHeader: X-Backstage-Token
+    cluster: ocp-dev
+    namespace: cdops-ci
 ```
 
 Tekton's CEL interceptor cannot read a Secret, so the shared secret is compared
@@ -553,32 +571,44 @@ oc logs deploy/<rhdh-deployment> -n <rhdh-namespace> -c backstage | \
 Then from a shell with a Developer Hub token:
 
 ```bash
+# ArgoCD side: the deployed state the card leads with
+curl -s "$BACKSTAGE/api/tekton-trigger/argocd/application?entityRef=component:default/policy-api" \
+  -H "Authorization: Bearer $TOKEN" | jq
+
+# ArgoCD side: the dropdown's contents
+curl -s "$BACKSTAGE/api/tekton-trigger/argocd/versions?entityRef=component:default/policy-api" \
+  -H "Authorization: Bearer $TOKEN" | jq
+
+# Tekton side: resolved target plus the pipeline's declared params
 curl -s "$BACKSTAGE/api/tekton-trigger/target?entityRef=component:default/policy-api" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-A resolved cluster/namespace/pipeline plus the pipeline's declared params means
-config, RBAC and annotations all line up. Finally, open the entity in RHDH: the
-overview card and the **CI** tab should both appear, and the trigger dialog
-should list the pipeline's parameters.
+An app with a sync and health status means the ArgoCD config, token and
+annotations line up; a non-empty `items` on the versions route means ArgoCD can
+read the application's repository. A resolved cluster/namespace/pipeline that
+declares the version parameter means the Tekton config, RBAC and annotations
+line up too. Finally, open the entity in RHDH: the overview card should show
+the deployed state, and the dropdown should preselect the version ArgoCD is
+tracking.
 
 ---
 
 ## 9. Troubleshooting
 
-| Symptom | Cause |
-| --- | --- |
-| Tab and card never render, no console error | `module:` mismatch — step 1a. The config references a Scalprum module RHDH cannot find. |
-| `Plugin ... not found in image` during init | The `!<name>` path doesn't match the exported package name. Re-check with `jq -r .name dist-dynamic/package.json`. |
-| Init container `ImagePullBackOff` | Pull secret not linked to the RHDH ServiceAccount — step 3. |
-| Backend fails with `permissionsRegistry` undefined | RHDH base is older than Backstage 1.39 — step 0. |
-| `No clusters are configured under tektonTrigger.clusters` | `pluginConfig` didn't merge. Check indentation and that the backend entry (not the frontend one) carries the `tektonTrigger` block. |
-| 403 from the OpenShift API | The Role is bound to the wrong ServiceAccount, or missing in that namespace — step 5. Apply it per namespace. |
-| `Namespace '<ns>' is not allowed` | The entity's `tekton.dev/namespace` is not in that cluster's `allowedNamespaces`. |
-| `Cluster '<x>' is not configured` | `tekton.dev/cluster` on the entity names a cluster that isn't in the config. |
-| Triggering works for everyone | `permission.enabled` is false or no policy grants/denies `tekton.pipeline.trigger` — step 6. |
-| Unknown-parameter errors on trigger | Intentional: params are validated against the Pipeline's declared params, and overriding a `tekton.dev/params` value is rejected rather than silently dropped. |
-| x509 errors against the API server | Set `caData` (base64 PEM) or `caFile`. `skipTLSVerify: true` exists for dev only. |
+| Symptom                                                   | Cause                                                                                                                                                          |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tab and card never render, no console error               | `module:` mismatch — step 1a. The config references a Scalprum module RHDH cannot find.                                                                        |
+| `Plugin ... not found in image` during init               | The `!<name>` path doesn't match the exported package name. Re-check with `jq -r .name dist-dynamic/package.json`.                                             |
+| Init container `ImagePullBackOff`                         | Pull secret not linked to the RHDH ServiceAccount — step 3.                                                                                                    |
+| Backend fails with `permissionsRegistry` undefined        | RHDH base is older than Backstage 1.39 — step 0.                                                                                                               |
+| `No clusters are configured under tektonTrigger.clusters` | `pluginConfig` didn't merge. Check indentation and that the backend entry (not the frontend one) carries the `tektonTrigger` block.                            |
+| 403 from the OpenShift API                                | The Role is bound to the wrong ServiceAccount, or missing in that namespace — step 5. Apply it per namespace.                                                  |
+| `Namespace '<ns>' is not allowed`                         | The entity's `tekton.dev/namespace` is not in that cluster's `allowedNamespaces`.                                                                              |
+| `Cluster '<x>' is not configured`                         | `tekton.dev/cluster` on the entity names a cluster that isn't in the config.                                                                                   |
+| Triggering works for everyone                             | `permission.enabled` is false or no policy grants/denies `tekton.pipeline.trigger` — step 6.                                                                   |
+| Unknown-parameter errors on trigger                       | Intentional: params are validated against the Pipeline's declared params, and overriding a `tekton.dev/params` value is rejected rather than silently dropped. |
+| x509 errors against the API server                        | Set `caData` (base64 PEM) or `caFile`. `skipTLSVerify: true` exists for dev only.                                                                              |
 
 ### Rolling back
 
