@@ -85,8 +85,22 @@ no entry for it, so `yarn export-dynamic` failed with "command not found". The
 script now invokes the RHDH CLI directly:
 
 ```json
-"export-dynamic": "npx -y @red-hat-developer-hub/cli@latest plugin export --embed-package @cdops/plugin-tekton-trigger-common"
+"export-dynamic": "rm -rf dist-dynamic && npx -y @red-hat-developer-hub/cli@latest plugin export --embed-package @cdops/plugin-tekton-trigger-common"
 ```
+
+The leading `rm -rf dist-dynamic` is required, not housekeeping. The CLI picks
+its install mode from whether `dist-dynamic/yarn.lock` already exists: absent, it
+copies the monorepo root lockfile in and runs `yarn install --no-immutable`;
+present, it runs `yarn install --immutable`. A lockfile left over from an earlier
+export pins the `file:` resolution hashes of the embedded packages, so once those
+are rebuilt the install genuinely needs to rewrite the lock and `--immutable`
+rejects it:
+
+```
+YN0028: The lockfile would have been modified by this install, which is explicitly forbidden.
+```
+
+Clearing the directory first makes every export a clean one.
 
 `@latest` is deliberate only as a default — pin the CLI to the version that
 matches your RHDH release (see step 0) before a production export, either by

@@ -23,7 +23,7 @@
     "clean": "backstage-cli package clean",
     "prepack": "backstage-cli package prepack",
     "postpack": "backstage-cli package postpack",
-    "export-dynamic": "npx -y @red-hat-developer-hub/cli@latest plugin export --embed-package @cdops/plugin-tekton-trigger-common"
+    "export-dynamic": "rm -rf dist-dynamic && npx -y @red-hat-developer-hub/cli@latest plugin export --embed-package @cdops/plugin-tekton-trigger-common"
   },
   "dependencies": {
     "@backstage/catalog-model": "^1.10.2",
