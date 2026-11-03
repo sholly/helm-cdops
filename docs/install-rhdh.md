@@ -26,7 +26,8 @@ steps 2 through 4, then come back here for steps 5 onward.
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | RHDH on a Backstage ≥ 1.39 base                                | The backend uses `coreServices.permissionsRegistry`, added in Backstage 1.39. This repo is pinned to 1.42 (`backstage.json`).                                                        | `oc exec deploy/<rhdh> -- cat /opt/app-root/src/package.json \| grep backstage` or the version matrix for your RHDH release |
 | OpenShift Pipelines ≥ 1.11                                     | The plugin uses the `tekton.dev/v1` API.                                                                                                                                             | `oc get csv -n openshift-operators \| grep pipelines`                                                                       |
-| RHDH's RBAC plugin enabled (optional)                          | Needed only if you want the three permissions to show up in the RBAC UI.                                                                                                             | `oc get cm dynamic-plugins-rhdh -o yaml \| grep rbac`                                                                       |
+| ArgoCD reachable from the RHDH pod, plus a read-only token      | The card leads with ArgoCD's deployed state and sources the version dropdown from the application's repository. Configured under the root `argocd` key — step 4a.                    | `oc get route -n openshift-gitops`                                                                                          |
+| RHDH's RBAC plugin enabled (optional)                          | Needed only if you want the four permissions to show up in the RBAC UI.                                                                                                             | `oc get cm dynamic-plugins-rhdh -o yaml \| grep rbac`                                                                       |
 | Node 20 or newer + Yarn 4, on the build host                   | `@backstage/cli` and the RHDH CLI. Yarn 4 is pinned by `packageManager` and committed under `.yarn/releases`. No native toolchain needed — nothing in the tree compiles from source. | `node -v`                                                                                                                   |
 | `podman` (or `docker`/`buildah`) and push rights to a registry | Dynamic plugins are shipped as an OCI image.                                                                                                                                         | `podman login quay.io`                                                                                                      |
 | An RHDH CLI version matching your RHDH release                 | Command names and flags changed between `@janus-idp/cli` (RHDH ≤ 1.6) and `@red-hat-developer-hub/cli` (1.7+).                                                                       | see [the RHDH version matrix](https://github.com/redhat-developer/rhdh/blob/main/docs/dynamic-plugins/versions.md)          |
@@ -50,7 +51,7 @@ RHDH resolves a mount point's component from the Scalprum module named
 originally exposed the module as `TektonTrigger` while neither
 `examples/app-config.dynamic-plugins.yaml` nor
 `plugins/tekton-trigger/app-config.janus-idp.yaml` set `module:` — so the mount
-points resolved to nothing and the tab and card silently never rendered.
+points resolved to nothing and the card silently never rendered.
 
 `plugins/tekton-trigger/package.json` now reads:
 
@@ -256,6 +257,7 @@ plugins:
           includeTags: true
           includeBranches: true
           maxVersions: 50
+        maxRuns: 20
       # ArgoCD, in the Roadie config shape. A read-only account is enough: the
       # plugin reads applications and lists repository refs, and never syncs.
       # If the Roadie ArgoCD plugins are already installed in this RHDH, their
@@ -267,7 +269,6 @@ plugins:
               - name: main
                 url: https://argocd.apps.ocp-dev.example.com
                 token: ${ARGOCD_MAIN_TOKEN}
-        maxRuns: 20
 
   # ---- frontend ----------------------------------------------------------
   - package: oci://quay.io/<org>/cdops-tekton-trigger:0.1.0!cdops-plugin-tekton-trigger
@@ -464,17 +465,18 @@ use that path).
 
 ## 6. Enable the permission framework (recommended)
 
-The backend registers three permissions with the permission registry, so RHDH's
+The backend registers four permissions with the permission registry, so RHDH's
 RBAC UI lists them once the plugin is loaded:
 
-| Permission                | Guards                                   |
-| ------------------------- | ---------------------------------------- |
-| `tekton.pipeline.read`    | reading the target and run history       |
-| `tekton.pipeline.trigger` | creating a run / firing an EventListener |
-| `tekton.pipeline.cancel`  | cancelling a run                         |
+| Permission                | Guards                                              |
+| ------------------------- | --------------------------------------------------- |
+| `argocd.application.read` | reading the deployed state and the version list     |
+| `tekton.pipeline.read`    | reading the target and run history                  |
+| `tekton.pipeline.trigger` | deploying: creating a run / firing an EventListener |
+| `tekton.pipeline.cancel`  | cancelling a run                                    |
 
-Without a policy, **every authenticated user who can see the entity can trigger
-its pipeline.** Turn the framework on:
+Without a policy, **every authenticated user who can see the entity can deploy
+it.** Turn the framework on:
 
 ```yaml
 permission:
@@ -485,14 +487,18 @@ Then grant them in your RBAC policy — e.g. in the `rbac-policy.csv` your RHDH
 RBAC plugin reads:
 
 ```csv
+p, role:default/platform-engineer, argocd.application.read, read, allow
 p, role:default/platform-engineer, tekton.pipeline.read, read, allow
 p, role:default/platform-engineer, tekton.pipeline.trigger, create, allow
 p, role:default/platform-engineer, tekton.pipeline.cancel, update, allow
 g, user:default/jay, role:default/platform-engineer
 ```
 
+Denying `argocd.application.read` blanks the card's deployed state while
+leaving the run history, so grant it to anyone who should see the card at all.
+
 For "owners only", a conditional policy on entity ownership is shown in the
-[README](../README.md#permissions). The UI greys out the buttons when a
+[README](../README.md#permissions). The card disables the deploy button when a
 permission is denied, and the backend enforces it regardless of the UI.
 
 ---
@@ -598,7 +604,7 @@ tracking.
 
 | Symptom                                                   | Cause                                                                                                                                                          |
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tab and card never render, no console error               | `module:` mismatch — step 1a. The config references a Scalprum module RHDH cannot find.                                                                        |
+| Card never renders, no console error                      | `module:` mismatch — step 1a. The config references a Scalprum module RHDH cannot find. The entity also needs `argocd/app-name` or `argocd/app-selector` for the mount point's `if:` to match. |
 | `Plugin ... not found in image` during init               | The `!<name>` path doesn't match the exported package name. Re-check with `jq -r .name dist-dynamic/package.json`.                                             |
 | Init container `ImagePullBackOff`                         | Pull secret not linked to the RHDH ServiceAccount — step 3.                                                                                                    |
 | Backend fails with `permissionsRegistry` undefined        | RHDH base is older than Backstage 1.39 — step 0.                                                                                                               |

@@ -9,8 +9,8 @@ Pick this over OCI when you want no registry credentials, no push rights and no
 pull secret linked to the RHDH ServiceAccount. Pick OCI when you want one
 versioned image holding both halves and your existing registry's auth, signing
 and retention. Everything after registration — cluster RBAC, the permission
-framework, entity annotations, verification — is identical, and is covered in
-[`install-rhdh.md`](install-rhdh.md) steps 5 through 9.
+framework, ArgoCD config, entity annotations, verification — is identical, and
+is covered in [`install-rhdh.md`](install-rhdh.md) steps 5 through 9.
 
 What changes versus OCI:
 
@@ -32,10 +32,18 @@ requirements — no `podman` and no push rights are needed. Still required:
 - RHDH on a Backstage ≥ 1.39 base (this repo is pinned to 1.42 in
   `backstage.json`); the backend uses `coreServices.permissionsRegistry`.
 - OpenShift Pipelines ≥ 1.11, for the `tekton.dev/v1` API.
-- **Node 20 or newer** on the build host, plus yarn. No native toolchain is
+- **Node 20 or newer + Yarn 4** on the build host. Yarn 4 is pinned by
+  `packageManager` and committed under `.yarn/releases`. No native toolchain is
   needed: nothing in the tree compiles from source.
 - `oc` logged in with rights to create builds in the RHDH namespace.
 - An RHDH CLI version matching your RHDH release.
+- **An ArgoCD instance reachable from the RHDH pod, plus a read-only API
+  token.** The card leads with ArgoCD's deployed state and sources the version
+  dropdown from the application's repository, so it renders an error without
+  one. The backend reads it from the root `argocd.appLocatorMethods` key — the
+  same Roadie shape the Roadie ArgoCD plugins use, and the same block is reused
+  if they are already installed. See [`install-rhdh.md`](install-rhdh.md) step
+  4a.
 
 ---
 
@@ -107,6 +115,25 @@ nothing:
 tar tzf /tmp/plugin-registry/cdops-plugin-tekton-trigger-0.1.0.tgz \
   | grep -E 'scalprum|plugin-manifest'
 ```
+
+Check the backend tarball too. The backend now has a third-party runtime
+dependency, `@roadiehq/backstage-plugin-argo-cd-node`, and `npm pack` excludes
+`node_modules` unless the export declared it as a bundled dependency:
+
+```bash
+jq -r '(.bundleDependencies // .bundledDependencies // "none")' \
+  plugins/tekton-trigger-backend/dist-dynamic/package.json
+
+tar tzf /tmp/plugin-registry/cdops-plugin-tekton-trigger-backend-dynamic-0.1.0.tgz \
+  | grep -c '@roadiehq/backstage-plugin-argo-cd-node'
+```
+
+If the dependency is only listed under `dependencies:`, the init container has
+to pull it from npm at install time — which undoes part of the reason for
+choosing this path, and fails outright in a cluster with no egress to the npm
+registry. In that case re-export with the CLI version matching your RHDH
+release, which bundles backend dependencies, rather than hand-editing the
+tarball.
 
 `/tmp/plugin-registry` must end up holding **only** the tarballs — the next step
 uploads the whole directory into the image's document root.
@@ -192,7 +219,8 @@ plugins:
     integrity: sha512-<from npm pack --json>
     disabled: false
     pluginConfig:
-      tektonTrigger: { ... }          # clusters, pipelineRun, maxRuns
+      tektonTrigger: { ... }          # clusters, pipelineRun, deploy, maxRuns
+      argocd: { ... }                 # appLocatorMethods, per the Roadie shape
 
   - package: http://plugin-registry:8080/cdops-plugin-tekton-trigger-0.1.0.tgz
     integrity: sha512-<from npm pack --json>
@@ -201,13 +229,16 @@ plugins:
       dynamicPlugins:
         frontend:
           cdops.plugin-tekton-trigger:
-            mountPoints: [ ... ]      # entity.page.ci/cards, entity.page.overview/cards
+            mountPoints: [ ... ]      # entity.page.overview/cards → EntityArgoCdDeployCard
 ```
 
 Notes:
 
-- The frontend `pluginConfig` is **mandatory**. Without the mount points the
-  bundle loads and renders nothing, with no console error.
+- The frontend `pluginConfig` is **mandatory**. Without the mount point the
+  bundle loads and renders nothing, with no console error. There is one
+  extension now — `EntityArgoCdDeployCard` on `entity.page.overview/cards`,
+  gated on `argocd/app-name` or `argocd/app-selector`. The separate CI-tab
+  content and trigger dialog are gone.
 - `integrity` is documented as required for tarball and JavaScript packages, in
   the form `<alg>-<digest>`; `sha256`, `sha384` and `sha512` are supported, and
   `npm pack --json` emits `sha512`.
@@ -221,7 +252,9 @@ Notes:
   `@visibility secret` in
   [`config.d.ts`](../plugins/tekton-trigger-backend/config.d.ts), so they are
   never served to the browser. Supply them through a Secret as env vars — see
-  [`install-rhdh.md`](install-rhdh.md) step 4d.
+  [`install-rhdh.md`](install-rhdh.md) step 4d. The ArgoCD instance `token`
+  lives under the root `argocd:` key, outside this repo's schema, so give it the
+  same treatment: `token: ${ARGOCD_MAIN_TOKEN}` from a Secret, never inline.
 - The Scalprum key `cdops.plugin-tekton-trigger` and the `PluginRoot` module
   name are what make the mount points resolve without a `module:` key. See
   [`install-rhdh.md`](install-rhdh.md) step 1a before changing either.
@@ -277,9 +310,9 @@ Unchanged from the OCI path, and documented in
 | Step | What |
 | --- | --- |
 | 5 | Bind the Tekton Role to RHDH's own ServiceAccount, per pipeline namespace |
-| 6 | `permission.enabled: true` plus an RBAC policy for the three permissions |
-| 7 | Annotate the entities that should get the tab and card |
-| 8 | Verify: init-container logs, `/dynamic-plugins-root`, backend logs, `GET /target` |
+| 6 | `permission.enabled: true` plus an RBAC policy for the four permissions (`argocd.application.read` joined the three Tekton ones) |
+| 7 | Annotate the entities that should get the card — the `argocd/*` annotations as well as the `tekton.dev/*` ones |
+| 8 | Verify: init-container logs, `/dynamic-plugins-root`, backend logs, `GET /argocd/application`, `GET /argocd/versions`, `GET /target` |
 
 ---
 
@@ -317,4 +350,5 @@ by this path:
 | Init container: 404 for the tarball | The file was not in the directory passed to `--from-dir`, or the name does not match the exported package name. Check with `curl -sSI` from a pod, and `jq -r .name dist-dynamic/package.json`. |
 | Init container: integrity missing/invalid format | `integrity` is required for tarballs, as `<alg>-<digest>` — take it from `npm pack --json`, not from a manual `sha512sum` (the digest is base64, not hex). |
 | Plugins vanish after an RHDH restart | The registry pod was unavailable at restart — step 6. |
-| Tab and card never render, no console error | Frontend `pluginConfig` missing, or a `module:` mismatch — [`install-rhdh.md`](install-rhdh.md) step 1a. |
+| Card never renders, no console error | Frontend `pluginConfig` missing, or a `module:` mismatch — [`install-rhdh.md`](install-rhdh.md) step 1a. The entity also needs `argocd/app-name` or `argocd/app-selector` for the mount point's `if:` to match. |
+| Init container: `ETARGET`/404 for `@roadiehq/backstage-plugin-argo-cd-node` | The backend's dependencies were not bundled into the tarball and the cluster cannot reach the npm registry — step 2. |

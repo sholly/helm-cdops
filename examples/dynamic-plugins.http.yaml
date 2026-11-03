@@ -14,6 +14,8 @@
 #   - the sha512 integrity values, from:
 #       npm pack --pack-destination /tmp/plugin-registry --json \
 #         | jq -r '.[0] | "\(.filename)  \(.integrity)"'
+#   - the cluster, ArgoCD and deploy values: URLs, namespaces, the pipeline
+#     parameter carrying the version, and the env vars holding the tokens
 #
 # `integrity` is a hash of the tarball CONTENT and is required for tarballs.
 # Never overwrite a published file in place — bump the version so the URL
@@ -55,7 +57,29 @@ plugins:
             app.kubernetes.io/part-of: developer-hub
           annotations:
             cdops.com/triggered-from: developer-hub
+        deploy:
+          # The pipeline must declare this parameter; the plugin sets it to the
+          # version picked in the card's dropdown. Per entity:
+          # tekton.dev/version-param.
+          versionParam: git-revision
+          # Passed only when the pipeline declares it.
+          appParam: argocd-app
+          # Which refs the dropdown offers, newest first.
+          includeTags: true
+          includeBranches: true
+          maxVersions: 50
         maxRuns: 20
+      # ArgoCD, in the Roadie config shape. A read-only account is enough: the
+      # plugin reads applications and lists repository refs, and never syncs.
+      # If the Roadie ArgoCD plugins are already installed in this RHDH, their
+      # argocd block is reused and this one can be omitted.
+      argocd:
+        appLocatorMethods:
+          - type: config
+            instances:
+              - name: main
+                url: https://argocd.apps.ocp-dev.example.com
+                token: ${ARGOCD_MAIN_TOKEN}
 
   # ---- frontend ------------------------------------------------------------
   # pluginConfig is REQUIRED here. Without the mount points the Scalprum bundle
