@@ -49,6 +49,8 @@ metadata:
       }
 
     # Optional: workspace bindings passed straight through to spec.workspaces.
+    # Not validated against the pipeline's declared workspaces, and ignored on
+    # the EventListener path - see docs/install-rhdh.md step 7.
     tekton.dev/workspaces: |
       [
         {

@@ -647,7 +647,7 @@ Choose **one** per cluster entry. 5a is the first row, 5b the second.
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | Projected token (recommended) | omit `serviceAccountToken` and `serviceAccountTokenFile`; the plugin defaults to `/var/run/secrets/kubernetes.io/serviceaccount/token` and the CA at `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`, re-read per request | RHDH on the same cluster as the pipelines — 5a      |
 | Static token                  | `serviceAccountToken: ${VAR}` from the `developer-hub-tekton-token` Secret created by `serviceaccount-remote.yaml`, plus `caData`                                                                                               | remote cluster — 5b                                 |
-| Mounted token file            | `serviceAccountTokenFile: /path/to/token`, re-read per request                                                                                                                                                                  | you project a second SA token into the pod yourself |
+| Mounted token file            | `serviceAccountTokenFile: /path/to/token`, re-read per request                                                                                                                                                                  | you project a token into the pod yourself — 5e      |
 
 Do not try to combine the two modes by pointing the RHDH pod's
 `serviceAccountName` at `developer-hub-tekton`: that changes the identity for
@@ -657,6 +657,111 @@ has, which avoids the question entirely.
 Also check egress: if the RHDH namespace has a restrictive NetworkPolicy, allow
 the pod to reach the Kubernetes API server (and the EventListener Route, if you
 use that path).
+
+---
+
+### 5e. When the pod has no projected token
+
+Mode 5a depends on a file the kubelet mounts for you, and more than one thing
+can leave it missing. The symptom is the same either way, on the first read of a
+PipelineRun:
+
+```
+Failed to read ServiceAccount token for cluster 'foo' from
+/var/run/secrets/kubernetes.io/serviceaccount/token; caused by
+Error: ENOENT: no such file or directory
+```
+
+This throws before any request leaves the pod — `#getToken()` runs ahead of
+`#getAgent()` in `TektonApiClient.ts` — so 5c can pass while every call fails.
+The RBAC is never reached, which makes a green `oc auth can-i` consistent with
+this error rather than evidence against it. List the directory first:
+
+```bash
+oc exec deploy/<rhdh-deployment> -n "$RHDH_NS" -- \
+  ls -l /var/run/secrets/kubernetes.io/serviceaccount/
+```
+
+- `token`, `ca.crt` and `namespace` — the mount is fine; the problem is
+  elsewhere.
+- Nothing at all — `automountServiceAccountToken: false` on the pod spec or on
+  the ServiceAccount. The pod spec wins when set either way; the default is
+  `true`.
+- **`ca.crt` alone** — a volume of your own is mounted at that path. The
+  standard mount always holds all three files, so one file means it is not the
+  ServiceAccount volume: the admission controller skips injecting the token
+  whenever a container already mounts something at the default path, and it
+  fails open, so the pod starts normally with no token.
+
+Find a shadowing mount with:
+
+```bash
+oc get deploy <rhdh-deployment> -n "$RHDH_NS" -o json | jq -r '
+  .spec.template.spec as $s
+  | ($s.containers[]), ($s.initContainers[]?)
+  | .name as $c | .volumeMounts[]?
+  | select(.mountPath | test("serviceaccount"))
+  | "\($c)\t\(.name)\t\(.mountPath)"'
+```
+
+That also catches a typo in a `mountPath`, which presents identically.
+
+You then have three options. Re-enable the automount on the pod spec, which
+overrides a `false` on the ServiceAccount:
+
+```bash
+oc patch deploy <rhdh-deployment> -n "$RHDH_NS" --type=merge \
+  -p '{"spec":{"template":{"spec":{"automountServiceAccountToken":true}}}}'
+```
+
+Make that permanent in whatever owns the deployment — the Backstage CR's
+`spec.deployment.patch` under the Operator, or your chart values — or the next
+reconcile reverts it. Or move the shadowing mount to a path outside
+`/var/run/secrets/kubernetes.io/serviceaccount`, which restores the injection
+but touches whatever wanted a CA bundle there.
+
+Or leave both alone and project a token for this plugin only — the third row of
+5d. The guard applies to the default path alone, and an explicitly declared
+`serviceAccountToken` source works even when `automountServiceAccountToken` is
+`false`:
+
+```yaml
+volumes:
+  - name: tekton-sa-token
+    projected:
+      sources:
+        - serviceAccountToken:
+            path: token
+            expirationSeconds: 3600
+        - configMap:
+            name: kube-root-ca.crt
+            items:
+              - key: ca.crt
+                path: ca.crt
+volumeMounts: # on the RHDH backend container
+  - name: tekton-sa-token
+    mountPath: /var/run/secrets/tekton
+    readOnly: true
+```
+
+```yaml
+serviceAccountTokenFile: /var/run/secrets/tekton/token
+caFile: /var/run/secrets/tekton/ca.crt
+```
+
+Set `caFile` as well. Once `serviceAccountTokenFile` is set the CA still
+defaults to the in-cluster path, and an unreadable `caFile` is only a warning —
+the client falls back to the system trust store, which will not trust the API
+server's internal serving certificate. Skipping it trades a clear `ENOENT` for
+an x509 error.
+
+This keeps the RHDH pod's own identity, so the `rolebinding-rhdh.yaml` bindings
+from 5a keep working, and the file is re-read per request so rotation is still
+automatic.
+
+Whichever option you take, note that RHDH itself had no token either. Anything
+else configured for in-cluster auth — the Kubernetes plugin, OCM, Topology —
+was reading the same missing file, possibly more quietly.
 
 ---
 
@@ -731,6 +836,77 @@ through to `spec.workspaces`), `tekton.dev/event-listener`. Full examples in
 The namespace must appear in that cluster's `allowedNamespaces`, or the request
 is rejected — that list is what stops someone editing a `catalog-info.yaml` to
 reach a namespace they shouldn't.
+
+### Workspaces and `volumeClaimTemplate`
+
+A Pipeline _declares_ workspaces by name; a PipelineRun _binds_ each name to
+storage. A `volumeClaimTemplate` is a binding, so it belongs on the run side and
+never in the Pipeline:
+
+```yaml
+# Pipeline: declare it, and thread it into every task that needs it
+spec:
+  workspaces:
+    - name: source
+      # optional: true   # then a run may leave it unbound
+  tasks:
+    - name: clone
+      taskRef: { name: git-clone }
+      workspaces:
+        - name: output # the Task's own name for it
+          workspace: source # the Pipeline workspace declared above
+```
+
+Mixing up those two names is the usual first error. The run side comes from
+`tekton.dev/workspaces` on the entity, passed through to `spec.workspaces`
+verbatim:
+
+```yaml
+tekton.dev/workspaces: |
+  [
+    {
+      "name": "source",
+      "volumeClaimTemplate": {
+        "spec": {
+          "accessModes": ["ReadWriteOnce"],
+          "resources": { "requests": { "storage": "1Gi" } },
+          "storageClassName": "gp3-csi"
+        }
+      }
+    }
+  ]
+```
+
+Any other binding shape works the same way — `secret`, `configMap`, `emptyDir`,
+or `persistentVolumeClaim` for a pre-existing claim reused across runs. Name
+`storageClassName` explicitly unless the namespace has a default, or the PVC
+sits `Pending` instead of failing.
+
+Three things to know:
+
+- **Nothing validates the binding.** The annotation is parsed as an opaque
+  array and never compared against the Pipeline's declared workspaces. A
+  missing or misspelled name produces a _successful_ deploy — the API accepts
+  the PipelineRun and the card shows a new run — which the reconciler then
+  fails with an `InvalidWorkspaceBinding` condition naming the workspace. Look
+  at the run's status, not at the deploy button. (`/target` does return the
+  Pipeline's declared workspaces, but nothing in the card renders them yet.)
+- **The EventListener path ignores this annotation.** That payload carries
+  `params` only, so workspaces have to be baked into the TriggerTemplate's
+  `resourcetemplates`, as
+  [`examples/openshift/eventlistener.yaml`](../examples/openshift/eventlistener.yaml)
+  does. An entity with both annotations takes the EventListener path, and the
+  annotation is dropped silently.
+- **`volumeClaimTemplate` creates one PVC per run**, owned by the run and
+  deleted only with it — and the plugin never deletes runs, since the Role has
+  no `delete` on `pipelineruns` by design. Without pruning you reach the
+  namespace storage quota eventually, after which new runs sit `Pending` until
+  the `timeouts.pipeline` default of `1h0m0s` expires. Set
+  `TektonConfig.spec.pruner` in OpenShift Pipelines, or bind a long-lived
+  `persistentVolumeClaim` where the workspace need not be per-run.
+
+No extra RBAC for any of this: the PVC is created by the Tekton controller under
+its own identity, not by the ServiceAccount that creates the PipelineRun.
 
 ### If you use the EventListener path
 
@@ -809,10 +985,13 @@ tracking.
 | Backend fails with `permissionsRegistry` undefined        | RHDH base is older than Backstage 1.39 — step 0.                                                                                                               |
 | `No clusters are configured under tektonTrigger.clusters` | `pluginConfig` didn't merge. Check indentation and that the backend entry (not the frontend one) carries the `tektonTrigger` block.                            |
 | 403 from the OpenShift API                                | The Role is bound to the wrong ServiceAccount, or missing in that namespace — step 5. Apply it per namespace.                                                  |
+| `Failed to read ServiceAccount token ... ENOENT` on `/var/run/secrets/kubernetes.io/serviceaccount/token` | The pod has no projected token: automount disabled, or a volume of your own mounted at that path suppressing the injection — step 5e. `oc auth can-i` still passes, because no request ever leaves the pod. |
 | `Namespace '<ns>' is not allowed`                         | The entity's `tekton.dev/namespace` is not in that cluster's `allowedNamespaces`.                                                                              |
 | `Cluster '<x>' is not configured`                         | `tekton.dev/cluster` on the entity names a cluster that isn't in the config.                                                                                   |
 | Triggering works for everyone                             | `permission.enabled` is false or no policy grants/denies `tekton.pipeline.trigger` — step 6.                                                                   |
 | Unknown-parameter errors on trigger                       | Intentional: params are validated against the Pipeline's declared params, and overriding a `tekton.dev/params` value is rejected rather than silently dropped. |
+| Deploy returns success, then the run fails at once with `InvalidWorkspaceBinding` | A workspace the Pipeline declares is unbound or misspelled in `tekton.dev/workspaces`, which is passed through unvalidated — step 7.                           |
+| `tekton.dev/workspaces` appears to be ignored             | The entity also has `tekton.dev/event-listener`, which takes precedence and sends `params` only. Bind workspaces in the TriggerTemplate — step 7.              |
 | x509 errors against the API server                        | Set `caData` (base64 PEM) or `caFile`. `skipTLSVerify: true` exists for dev only.                                                                              |
 
 ### Rolling back

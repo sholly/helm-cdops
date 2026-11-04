@@ -233,6 +233,11 @@ of the three sets a namespace, so `oc apply -n` decides where objects land.
   Do **not** repoint the RHDH pod's `serviceAccountName` instead — that changes
   the identity for everything else RHDH does in-cluster.
 
+  If the plugin logs `ENOENT` for that token path, the pod has no projected
+  token — automount disabled, or a volume of your own mounted at that path,
+  which suppresses the injection silently. See
+  [`docs/install-rhdh.md`](docs/install-rhdh.md) step 5e.
+
 - **Developer Hub off-cluster** — create a dedicated ServiceAccount with a
   long-lived token using
   [`serviceaccount-remote.yaml`](examples/openshift/serviceaccount-remote.yaml),
@@ -322,11 +327,14 @@ Tekton:
 | `tekton.dev/app-param`       | no       | Parameter carrying the application name; else `deploy.appParam`   |
 | `tekton.dev/service-account` | no       | ServiceAccount for the TaskRuns                                   |
 | `tekton.dev/params`          | no       | JSON object of parameter values pinned by the catalog             |
-| `tekton.dev/workspaces`      | no       | JSON array passed through to `spec.workspaces`                    |
+| `tekton.dev/workspaces`      | no       | JSON array passed through to `spec.workspaces`³                   |
 
 ² Either `tekton.dev/pipeline` or `tekton.dev/event-listener`. An entity with
 ArgoCD annotations but no Tekton ones still gets the card and its deployed
 state; the deploy button has nothing to run.
+
+³ Passed through unvalidated, and ignored on the EventListener path — see
+[`docs/install-rhdh.md`](docs/install-rhdh.md#workspaces-and-volumeclaimtemplate).
 
 The version parameter may not appear in `tekton.dev/params`: a pinned version
 would contradict the dropdown, so the backend rejects it with an explanation
@@ -467,7 +475,11 @@ backend of a host Backstage app.
   settled), not streamed.
 - Logs are not proxied; the card deep-links to the OpenShift console (or Tekton
   Dashboard) run page and to the application in ArgoCD.
-- Workspace bindings are declared per entity via `tekton.dev/workspaces`.
+- **Workspace bindings are not validated.** `tekton.dev/workspaces` reaches
+  `spec.workspaces` untouched, so an unbound workspace is accepted at create
+  time and fails on the run with `InvalidWorkspaceBinding`; the EventListener
+  path ignores the annotation outright. See
+  [`docs/install-rhdh.md`](docs/install-rhdh.md#workspaces-and-volumeclaimtemplate).
 - Requires Backstage ≥ 1.39 (new backend system, `coreServices.permissionsRegistry`),
   Tekton `tekton.dev/v1` (OpenShift Pipelines ≥ 1.11), and an ArgoCD with the
   `repositories/{repo}/refs` endpoint (≥ 1.8).
