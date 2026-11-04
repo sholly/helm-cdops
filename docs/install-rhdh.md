@@ -527,45 +527,132 @@ spec:
 
 ## 5. Give RHDH access to Tekton
 
-[`examples/openshift/rbac.yaml`](../examples/openshift/rbac.yaml) creates a
-dedicated `developer-hub-tekton` ServiceAccount plus Role and RoleBinding. For
-an **existing** RHDH deployment, the simpler and usually better route is to bind
-that Role to the ServiceAccount the RHDH pod already runs as, so the projected
-token it reads is the one that carries the permissions.
+Access is split across three files so that each is applied to the namespaces it
+actually belongs in. None of them hardcodes a namespace, so `oc apply -n`
+decides where the objects land.
 
-```bash
-RHDH_SA=$(oc get deploy <rhdh-deployment> -n <rhdh-namespace> \
-  -o jsonpath='{.spec.template.spec.serviceAccountName}')
-echo "$RHDH_SA"
-```
+| File                                                                                   | Contains                                      | Apply to                           |
+| -------------------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------- |
+| [`rbac.yaml`](../examples/openshift/rbac.yaml)                                         | the `developer-hub-tekton` Role               | **every** pipeline namespace       |
+| [`rolebinding-rhdh.yaml`](../examples/openshift/rolebinding-rhdh.yaml)                 | RoleBinding to RHDH's own ServiceAccount      | every pipeline namespace           |
+| [`serviceaccount-remote.yaml`](../examples/openshift/serviceaccount-remote.yaml)       | dedicated ServiceAccount + long-lived token   | **one** namespace, remote clusters |
 
-Then, **per pipeline namespace** (every namespace listed in
-`allowedNamespaces`):
-
-```bash
-oc apply -n cdops-ci -f examples/openshift/rbac.yaml   # creates the Role
-oc create rolebinding developer-hub-tekton-rhdh \
-  --role=developer-hub-tekton \
-  --serviceaccount=<rhdh-namespace>:"$RHDH_SA" \
-  -n cdops-ci
-```
+Apply `rbac.yaml` plus **one** of the two binding files. The Role grants nothing
+on its own, and a RoleBinding referencing a Role that does not exist applies
+cleanly while granting nothing — so a missed step fails silently either way.
+Verify with `oc auth can-i` at the end.
 
 The Role is least-privilege by design: `get`/`list` on `pipelines` and
 `taskruns`, and `get`/`list`/`watch`/`create`/`patch` on `pipelineruns`
 (`patch` is what cancellation uses).
 
-Choose **one** of these three credential modes per cluster entry:
+### 5a. RHDH on the same cluster (recommended)
 
-| Mode                          | Config                                                                                                                                                                                                                           | When                                                |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| Projected token (recommended) | omit `serviceAccountToken` and `serviceAccountTokenFile`; the plugin defaults to `/var/run/secrets/kubernetes.io/serviceaccount/token` and the CA at `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`, re-read per request | RHDH on the same cluster as the pipelines           |
-| Static token                  | `serviceAccountToken: ${VAR}` from the `developer-hub-tekton-token` Secret, plus `caData`                                                                                                                                        | remote cluster                                      |
-| Mounted token file            | `serviceAccountTokenFile: /path/to/token`                                                                                                                                                                                        | you project a second SA token into the pod yourself |
+Bind the Role to the ServiceAccount the RHDH pod already runs as, so the
+projected token it reads is the one carrying the permissions. Nothing expires
+and there is no Secret to manage.
 
-If you stay with the repo's separate `developer-hub-tekton` SA **and** want the
-projected-token mode, you must also change the RHDH pod's `serviceAccountName`
-to it — which affects everything else RHDH does in-cluster. Binding the Role to
-RHDH's own SA avoids that entirely.
+```bash
+RHDH_NS=<rhdh-namespace>
+RHDH_SA=$(oc get deploy <rhdh-deployment> -n "$RHDH_NS" \
+  -o jsonpath='{.spec.template.spec.serviceAccountName}')
+RHDH_SA=${RHDH_SA:-default}   # unset means the pod runs as `default`
+echo "$RHDH_SA"
+
+for ns in cdops-ci cdops-build; do
+  oc apply -n "$ns" -f examples/openshift/rbac.yaml
+  sed -e "s|REPLACE_RHDH_NAMESPACE|$RHDH_NS|" \
+      -e "s|REPLACE_RHDH_SERVICEACCOUNT|$RHDH_SA|" \
+    examples/openshift/rolebinding-rhdh.yaml | oc apply -n "$ns" -f -
+done
+```
+
+`subjects[].namespace` is the RHDH namespace while the RoleBinding itself lives
+in the pipeline namespace. That cross-namespace reference is the point: one RHDH
+pod reaches pipelines in several namespaces without a Secret anywhere.
+
+Leave both `serviceAccountToken` and `serviceAccountTokenFile` unset on the
+cluster entry — `config.ts` then defaults to the projected token and the
+in-cluster CA.
+
+### 5b. RHDH on another cluster
+
+A remote RHDH has no projected token for the target cluster, so it needs a
+dedicated ServiceAccount and a long-lived token.
+
+`serviceAccountToken` is a **single value per cluster entry** while
+`allowedNamespaces` may list several namespaces. So create exactly one
+ServiceAccount and bind it in each of the others; applying
+`serviceaccount-remote.yaml` to several namespaces would create several
+ServiceAccounts, each with its own token, and only one could be configured.
+
+```bash
+SA_NS=cdops-release
+
+# the Role, in every pipeline namespace
+for ns in cdops-release cdops-build; do
+  oc --context ocp-prod apply -n "$ns" -f examples/openshift/rbac.yaml
+done
+
+# the ServiceAccount, its token and its binding, in ONE of them
+sed "s|REPLACE_SERVICEACCOUNT_NAMESPACE|$SA_NS|" \
+  examples/openshift/serviceaccount-remote.yaml \
+  | oc --context ocp-prod apply -n "$SA_NS" -f -
+
+# bind that same ServiceAccount in every OTHER pipeline namespace
+for ns in cdops-build; do
+  oc --context ocp-prod create rolebinding developer-hub-tekton \
+    --role=developer-hub-tekton \
+    --serviceaccount="$SA_NS:developer-hub-tekton" \
+    -n "$ns"
+done
+```
+
+Then read out the token and CA for step 4a's Secret:
+
+```bash
+oc --context ocp-prod get secret developer-hub-tekton-token -n "$SA_NS" \
+  -o jsonpath='{.data.token}' | base64 -d          # -> serviceAccountToken
+oc --context ocp-prod get secret developer-hub-tekton-token -n "$SA_NS" \
+  -o jsonpath='{.data.ca\.crt}'                    # -> caData, already base64
+```
+
+`caData` is base64-encoded PEM (`TektonApiClient.ts` does
+`Buffer.from(caData, 'base64')`), so the `jsonpath` value is used as-is without
+decoding. It verifies the API server only when the cluster uses its default
+serving certificate; with a custom `apiServer.spec.servingCerts.namedCertificates`
+you need that issuer's CA instead, which
+`openssl s_client -showcerts -connect api.ocp-prod.example.com:6443` will show.
+
+### 5c. Verify
+
+Per pipeline namespace, substituting the ServiceAccount you actually bound.
+This must print `yes` four times:
+
+```bash
+for v in get:pipelines create:pipelineruns patch:pipelineruns get:taskruns; do
+  oc auth can-i "${v%%:*}" "${v##*:}.tekton.dev" -n cdops-ci \
+    --as="system:serviceaccount:$RHDH_NS:$RHDH_SA"
+done
+```
+
+A `no` here is the cheapest place to catch a missed namespace — the plugin
+surfaces the same problem later as a 403 from the OpenShift API.
+
+### 5d. The three credential modes
+
+Choose **one** per cluster entry. 5a is the first row, 5b the second.
+
+| Mode                          | Config                                                                                                                                                                                                                         | When                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| Projected token (recommended) | omit `serviceAccountToken` and `serviceAccountTokenFile`; the plugin defaults to `/var/run/secrets/kubernetes.io/serviceaccount/token` and the CA at `/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`, re-read per request | RHDH on the same cluster as the pipelines — 5a      |
+| Static token                  | `serviceAccountToken: ${VAR}` from the `developer-hub-tekton-token` Secret created by `serviceaccount-remote.yaml`, plus `caData`                                                                                               | remote cluster — 5b                                 |
+| Mounted token file            | `serviceAccountTokenFile: /path/to/token`, re-read per request                                                                                                                                                                  | you project a second SA token into the pod yourself |
+
+Do not try to combine the two modes by pointing the RHDH pod's
+`serviceAccountName` at `developer-hub-tekton`: that changes the identity for
+everything else RHDH does in-cluster. 5a binds the Role to the SA RHDH already
+has, which avoids the question entirely.
 
 Also check egress: if the RHDH namespace has a restrictive NetworkPolicy, allow
 the pod to reach the Kubernetes API server (and the EventListener Route, if you

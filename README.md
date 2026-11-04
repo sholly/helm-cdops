@@ -206,16 +206,46 @@ secret — see
 
 ### 4. Cluster access
 
-```bash
-oc apply -n cdops-ci -f examples/openshift/rbac.yaml
-```
+[`examples/openshift/rbac.yaml`](examples/openshift/rbac.yaml) holds the
+least-privilege Role and goes in **every** namespace the plugin may run
+pipelines in. Bind it with one of two files, depending on where RHDH runs. None
+of the three sets a namespace, so `oc apply -n` decides where objects land.
 
-- **Developer Hub on the same cluster** — leave `serviceAccountToken` unset and
-  run the pod as `developer-hub-tekton`. The plugin reads the projected token
-  from `/var/run/secrets/kubernetes.io/serviceaccount/token` on **every**
-  request, so rotation needs no restart.
-- **Developer Hub off-cluster** — take the token from the
-  `developer-hub-tekton-token` Secret and pass it in as an env var.
+- **Developer Hub on the same cluster** (recommended) — bind the Role to the
+  ServiceAccount the RHDH pod already runs as, with
+  [`rolebinding-rhdh.yaml`](examples/openshift/rolebinding-rhdh.yaml). Leave
+  `serviceAccountToken` unset; the plugin reads the projected token from
+  `/var/run/secrets/kubernetes.io/serviceaccount/token` on **every** request, so
+  nothing expires and there is no Secret to manage.
+
+  ```bash
+  RHDH_NS=<rhdh-namespace>
+  RHDH_SA=$(oc get deploy <rhdh-deployment> -n "$RHDH_NS" \
+    -o jsonpath='{.spec.template.spec.serviceAccountName}')
+  for ns in cdops-ci cdops-build; do
+    oc apply -n "$ns" -f examples/openshift/rbac.yaml
+    sed -e "s|REPLACE_RHDH_NAMESPACE|$RHDH_NS|" \
+        -e "s|REPLACE_RHDH_SERVICEACCOUNT|${RHDH_SA:-default}|" \
+      examples/openshift/rolebinding-rhdh.yaml | oc apply -n "$ns" -f -
+  done
+  ```
+
+  Do **not** repoint the RHDH pod's `serviceAccountName` instead — that changes
+  the identity for everything else RHDH does in-cluster.
+
+- **Developer Hub off-cluster** — create a dedicated ServiceAccount with a
+  long-lived token using
+  [`serviceaccount-remote.yaml`](examples/openshift/serviceaccount-remote.yaml),
+  then pass the token in as an env var. `serviceAccountToken` is one value per
+  cluster, so create the ServiceAccount in **one** namespace and bind it in the
+  rest — see [`docs/install-rhdh.md`](docs/install-rhdh.md) step 5b.
+
+Verify either way, per namespace:
+
+```bash
+oc auth can-i create pipelineruns.tekton.dev -n cdops-ci \
+  --as="system:serviceaccount:<rhdh-namespace>:<rhdh-serviceaccount>"
+```
 
 ### 5. Configure
 

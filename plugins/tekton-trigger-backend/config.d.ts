@@ -16,7 +16,9 @@ export interface Config {
 
       /**
        * Bearer token of a ServiceAccount with the Tekton RBAC from
-       * `examples/openshift/rbac.yaml`.
+       * `examples/openshift/rbac.yaml`, created by
+       * `examples/openshift/serviceaccount-remote.yaml`. Only needed for a
+       * cluster other than the one Developer Hub runs on.
        * @visibility secret
        */
       serviceAccountToken?: string;

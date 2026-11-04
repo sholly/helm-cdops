@@ -9,7 +9,7 @@ tektonTrigger:
   clusters:
     - name: ocp-dev
       url: https://api.ocp-dev.example.com:6443
-      # ServiceAccount token from examples/openshift/rbac.yaml.
+      # ServiceAccount token from examples/openshift/serviceaccount-remote.yaml.
       # Omit both token options when Developer Hub runs on the same cluster:
       # the plugin then reads the projected token at
       # /var/run/secrets/kubernetes.io/serviceaccount/token.

@@ -1,27 +1,38 @@
-# Least-privilege access for the tekton-trigger backend plugin.
+# Least-privilege Tekton access for the tekton-trigger backend plugin.
 #
-#   oc apply -n cdops-ci -f examples/openshift/rbac.yaml
+# This file holds only the Role, which is needed in EVERY namespace the plugin
+# may run pipelines in - i.e. every namespace listed in
+# tektonTrigger.clusters[].allowedNamespaces.
 #
-# Apply once per namespace that Developer Hub is allowed to run pipelines in,
-# and list those namespaces under tektonTrigger.clusters[].allowedNamespaces.
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: developer-hub-tekton
-  namespace: cdops-ci
-  labels:
-    app.kubernetes.io/part-of: developer-hub
+# No namespace is set on any object, so `oc apply -n` decides where it lands:
+#
+#   for ns in cdops-ci cdops-build; do
+#     oc apply -n "$ns" -f examples/openshift/rbac.yaml
+#   done
+#
+# A Role grants nothing until something is bound to it. Pick ONE binding mode
+# and apply its file to the same namespaces:
+#
+#   RHDH on this cluster (recommended) -> rolebinding-rhdh.yaml
+#     Binds the Role to the ServiceAccount the RHDH pod already runs as. The
+#     plugin then reads the pod's projected token, so there is no Secret to
+#     create, distribute or rotate. Leave serviceAccountToken unset.
+#
+#   RHDH on another cluster            -> serviceaccount-remote.yaml
+#     Creates a dedicated ServiceAccount with a long-lived token that you copy
+#     into the RHDH pod's environment as serviceAccountToken.
+#
+# See docs/install-rhdh.md step 5.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: developer-hub-tekton
-  namespace: cdops-ci
   labels:
     app.kubernetes.io/part-of: developer-hub
 rules:
-  # Read the Pipeline so the UI can render its parameters.
+  # Read the Pipeline so the UI can render its parameters, and so the backend
+  # can reject a deploy whose pipeline does not declare the version parameter.
   - apiGroups: ['tekton.dev']
     resources: ['pipelines']
     verbs: ['get', 'list']
@@ -33,31 +44,3 @@ rules:
   - apiGroups: ['tekton.dev']
     resources: ['taskruns']
     verbs: ['get', 'list']
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: developer-hub-tekton
-  namespace: cdops-ci
-  labels:
-    app.kubernetes.io/part-of: developer-hub
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: developer-hub-tekton
-subjects:
-  - kind: ServiceAccount
-    name: developer-hub-tekton
-    namespace: cdops-ci
----
-# Only needed when Developer Hub runs OUTSIDE this cluster. On-cluster
-# deployments should use the projected token instead (leave serviceAccountToken
-# unset) so credentials rotate automatically.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: developer-hub-tekton-token
-  namespace: cdops-ci
-  annotations:
-    kubernetes.io/service-account.name: developer-hub-tekton
-type: kubernetes.io/service-account-token

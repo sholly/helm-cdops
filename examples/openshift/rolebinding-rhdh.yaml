@@ -1,0 +1,58 @@
+# Binds the developer-hub-tekton Role to the ServiceAccount the RHDH pod
+# already runs as. Use this when RHDH runs on the SAME cluster as the pipelines.
+#
+# This is the recommended mode: the plugin falls back to the pod's projected
+# token at /var/run/secrets/kubernetes.io/serviceaccount/token and re-reads it on
+# every request, so nothing expires and there is no Secret to manage. Leave both
+# serviceAccountToken and serviceAccountTokenFile unset on the cluster entry.
+#
+# Apply examples/openshift/rbac.yaml first - this binding references the Role it
+# creates, and a RoleBinding to a missing Role applies cleanly while granting
+# nothing.
+#
+# Two values below must be replaced with the namespace and ServiceAccount of
+# your RHDH deployment. Find them with:
+#
+#   RHDH_NS=<rhdh-namespace>
+#   RHDH_SA=$(oc get deploy <rhdh-deployment> -n "$RHDH_NS" \
+#     -o jsonpath='{.spec.template.spec.serviceAccountName}')
+#   echo "${RHDH_SA:-default}"
+#
+# An empty result means the deployment does not set serviceAccountName, in which
+# case the pod runs as `default` and that is what you fill in.
+#
+# Then apply it to every pipeline namespace, substituting both values:
+#
+#   for ns in cdops-ci cdops-build; do
+#     sed -e "s|REPLACE_RHDH_NAMESPACE|$RHDH_NS|" \
+#         -e "s|REPLACE_RHDH_SERVICEACCOUNT|${RHDH_SA:-default}|" \
+#       examples/openshift/rolebinding-rhdh.yaml | oc apply -n "$ns" -f -
+#   done
+#
+# Verify, per namespace - this must print `yes`:
+#
+#   oc auth can-i create pipelineruns.tekton.dev -n cdops-ci \
+#     --as="system:serviceaccount:$RHDH_NS:${RHDH_SA:-default}"
+#
+# No namespace is set on the RoleBinding itself, so `oc apply -n` decides where
+# it lands. subjects[].namespace is the RHDH namespace, which is a DIFFERENT
+# namespace from the one the binding is created in - that is expected, and is
+# what lets one RHDH pod reach pipelines in several namespaces.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developer-hub-tekton-rhdh
+  labels:
+    app.kubernetes.io/part-of: developer-hub
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  # Created by examples/openshift/rbac.yaml, in this same namespace.
+  name: developer-hub-tekton
+subjects:
+  - kind: ServiceAccount
+    # The ServiceAccount the RHDH pod runs as, NOT a new one. `namespace` is
+    # required for a ServiceAccount subject; the API server rejects it empty.
+    name: REPLACE_RHDH_SERVICEACCOUNT
+    namespace: REPLACE_RHDH_NAMESPACE
