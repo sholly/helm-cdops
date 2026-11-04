@@ -42,5 +42,8 @@
     "node": ">=20"
   },
   "prettier": "@backstage/cli/config/prettier",
-  "packageManager": "yarn@4.18.1"
+  "packageManager": "yarn@4.18.1",
+  "resolutions": {
+    "webpack": "5.105.4"
+  }
 }

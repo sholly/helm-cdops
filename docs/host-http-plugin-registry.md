@@ -68,9 +68,13 @@ published tarball, so its `dist/` has to exist first.
 Each `export-dynamic` runs the RHDH CLI's `plugin export --embed-package
 @cdops/plugin-tekton-trigger-common` and writes a derived package into that
 plugin's `dist-dynamic/`, with `-dynamic` appended to the package name. The
-script uses `@latest` as a default only — pin the CLI to your RHDH release
-before a production export. See [`install-rhdh.md`](install-rhdh.md) step 2 for
-what `plugin export` does in detail.
+script uses the `rhdh-cli` pinned to `1.10.8`, the release line matching RHDH
+1.10 — do not change it to `npx ... @latest`, which emits Module Federation
+assets a Scalprum host cannot serve and also breaks the single-webpack
+resolution (`install-rhdh.md` steps 1c and 1d). Before packing, confirm
+`dist-dynamic/dist-scalprum/plugin-manifest.json` exists. See
+[`install-rhdh.md`](install-rhdh.md) step 2 for what `plugin export` does in
+detail.
 
 ---
 

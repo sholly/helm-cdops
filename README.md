@@ -176,9 +176,21 @@ yarn --cwd plugins/tekton-trigger export-dynamic
 yarn --cwd plugins/tekton-trigger-backend export-dynamic
 ```
 
-`export-dynamic` calls the RHDH packaging CLI, `@red-hat-developer-hub/cli`, and
-embeds the shared `-common` package. Pin the CLI to the version that matches
-your RHDH release instead of `@latest` for a production export.
+`export-dynamic` calls the RHDH packaging CLI, `@red-hat-developer-hub/cli`,
+pinned to `1.10.8` as a devDependency of each plugin, and embeds the shared
+`-common` package. Two things are load-bearing and both fail silently:
+
+- the CLI **pin** — 2.1.0 dropped the Scalprum output RHDH 1.10 still needs, so
+  never use `@latest`; match the release line to your RHDH;
+- the root **`resolutions: { "webpack": "5.105.4" }`** — two webpack copies make
+  the Scalprum bundle build emit nothing while exiting 0.
+
+Both are explained in [`docs/install-rhdh.md`](docs/install-rhdh.md) steps 1c
+and 1d. After any frontend export, confirm the bundle exists:
+
+```bash
+ls plugins/tekton-trigger/dist-dynamic/dist-scalprum/plugin-manifest.json
+```
 
 Mount-point configuration is in
 [`examples/app-config.dynamic-plugins.yaml`](examples/app-config.dynamic-plugins.yaml).

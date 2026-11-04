@@ -85,7 +85,7 @@ no entry for it, so `yarn export-dynamic` failed with "command not found". The
 script now invokes the RHDH CLI directly:
 
 ```json
-"export-dynamic": "rm -rf dist-dynamic && npx -y @red-hat-developer-hub/cli@latest plugin export --embed-package @cdops/plugin-tekton-trigger-common"
+"export-dynamic": "rm -rf dist-dynamic && npx -y @red-hat-developer-hub/cli@1.10.8 plugin export --embed-package @cdops/plugin-tekton-trigger-common"
 ```
 
 The leading `rm -rf dist-dynamic` is required, not housekeeping. The CLI picks
@@ -102,9 +102,105 @@ YN0028: The lockfile would have been modified by this install, which is explicit
 
 Clearing the directory first makes every export a clean one.
 
-`@latest` is deliberate only as a default — pin the CLI to the version that
-matches your RHDH release (see step 0) before a production export, either by
-editing the script or by running the pinned command from step 2 by hand.
+### 1c. The pinned CLI version
+
+The CLI version is pinned to `1.10.8` and **must not** be changed to `@latest`.
+
+The CLI publishes one release line per RHDH release, with matching dist-tags
+(`release-1.10` → `1.10.8`). Pick the line that matches your RHDH:
+
+```bash
+npm view @red-hat-developer-hub/cli dist-tags
+```
+
+CLI **2.1.0 removed Scalprum support**: from that version on, `plugin export`
+emits only standard Module Federation assets (`dist/mf-manifest.json`,
+`dist/remoteEntry.js`) and provides no fallback. RHDH did not switch to standard
+module federation by default until 2.1 — 1.10 only offers it as an opt-in
+(`ENABLE_STANDARD_MODULE_FEDERATION=true` with `packages/app-next`), and Scalprum
+is the default. A `@latest` export against a Scalprum host installs cleanly and
+then fails to serve any frontend asset, with one line in the RHDH pod log:
+
+```
+scalprum warn could not find scalprum-dist folder for plugin @cdops/plugin-tekton-trigger-dynamic@0.1.0
+```
+
+The backend plugin is unaffected — it is plain CJS and loads by another path —
+so the symptom is a working API with no card and nothing in the browser console.
+
+After every frontend export, check the Scalprum manifest exists before packing:
+
+```bash
+ls plugins/tekton-trigger/dist-dynamic/dist-scalprum/plugin-manifest.json
+```
+
+If that file is missing the frontend export produced nothing usable, and the
+card will not render. Two distinct causes produce an empty or absent
+`dist-scalprum`; see 1d for the second.
+
+For RHDH **1.6 or older** the CLI is a different package entirely:
+`npx @janus-idp/cli package export-dynamic-plugin --embed-package ...`.
+
+### 1d. One webpack copy, pinned by `resolutions`
+
+The CLI is a **devDependency of each plugin package**, not an `npx -y` call, and
+the repo root pins:
+
+```jsonc
+  "resolutions": {
+    "webpack": "5.105.4"
+  }
+```
+
+Both are required, and this is the subtler of the two failures.
+
+Scalprum assets are produced by `@openshift/dynamic-plugin-sdk-webpack`, whose
+`DynamicRemotePlugin` constructs a `ModuleFederationPlugin` from *its own*
+resolved `webpack` and applies it to the compiler the CLI created. webpack hooks
+are per-instance, so if those two resolve to different copies the plugin taps
+hooks that do not exist on that compiler:
+
+```
+TypeError: Cannot read properties of undefined (reading 'tap')
+    at ModuleFederationPlugin.apply (.../webpack/lib/container/ModuleFederationPlugin.js:340)
+    at DynamicRemotePlugin.apply (.../@openshift/dynamic-plugin-sdk-webpack/dist/index.cjs.js:349)
+```
+
+Two copies is the default outcome without the resolution: `@backstage/cli`
+asks for `webpack@^5.94.0` (resolving to 5.112.x) while the RHDH CLI asks for
+`~5.105.0`. `5.105.4` satisfies both ranges, so the resolution collapses them
+into one copy. Verify:
+
+```bash
+# both must print the same path
+node -e "const p=require('path');
+for (const d of ['@openshift/dynamic-plugin-sdk-webpack','@red-hat-developer-hub/cli'])
+  console.log(require.resolve('webpack/package.json',
+    { paths: [p.dirname(require.resolve(d + '/package.json'))] }));"
+
+# expect exactly one line (@svgr/webpack is a different package - excluded)
+find node_modules -maxdepth 4 -path '*/webpack/package.json' -not -path '*@svgr*'
+```
+
+The failure is silent and **exits 0**. webpack throws inside its own callback
+before the compiler has scheduled any work, the CLI's promise never settles, the
+event loop empties and node exits cleanly — so the export prints
+
+```
+Generating dynamic frontend plugin assets in .../dist-dynamic/dist-scalprum
+Using scalprum config inlined in the 'package.json'
+```
+
+and then simply stops, leaving `dist-scalprum/` created but empty. There is no
+error, no non-zero status and nothing for CI to catch, which is why the
+`ls dist-scalprum/plugin-manifest.json` check above is worth keeping in the
+pipeline. A healthy export instead ends with a file-size table of
+`dist-scalprum/...` assets followed by `Filling supported-versions with 1.42.0.`
+
+Do not replace `rhdh-cli` in the `export-dynamic` scripts with `npx -y
+@red-hat-developer-hub/cli@...`. The flat npx install hoists one webpack and
+nests the other, which reintroduces exactly this bug while the root
+`resolutions` entry has no effect on the npx tree.
 
 ---
 
@@ -133,7 +229,7 @@ yarn --cwd plugins/tekton-trigger-backend export-dynamic
 Each script runs, from that package's root:
 
 ```bash
-npx -y @red-hat-developer-hub/cli@<version-for-your-rhdh> plugin export \
+npx -y @red-hat-developer-hub/cli@1.10.8 plugin export \
   --embed-package @cdops/plugin-tekton-trigger-common
 ```
 
@@ -183,7 +279,7 @@ halves ship and version together:
 
 ```bash
 cd /path/to/helm-cdops
-npx @red-hat-developer-hub/cli@latest plugin package \
+npx @red-hat-developer-hub/cli@1.10.8 plugin package \
   --tag quay.io/<org>/cdops-tekton-trigger:0.1.0 \
   plugins/tekton-trigger plugins/tekton-trigger-backend
 
@@ -619,6 +715,8 @@ tracking.
 | Symptom                                                   | Cause                                                                                                                                                          |
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Card never renders, no console error                      | `module:` mismatch — step 1a. The config references a Scalprum module RHDH cannot find. The entity also needs `argocd/app-name` or `argocd/app-selector` for the mount point's `if:` to match. |
+| `scalprum warn could not find scalprum-dist folder for plugin ...` in the RHDH pod log | The export used a 2.x CLI, which emits Module Federation assets only. Re-export with the CLI line matching your RHDH — step 1c. The backend keeps working, so the API responds while no card renders. |
+| `dist-scalprum/` empty after `export-dynamic`, which exited 0 | Two webpack copies — step 1d. Check `find node_modules -maxdepth 4 -path '*/webpack/package.json'` returns one, and that the script calls `rhdh-cli`, not `npx`. |
 | `Plugin ... not found in image` during init               | The `!<name>` path doesn't match the exported package name. Re-check with `jq -r .name dist-dynamic/package.json`.                                             |
 | Init container `ImagePullBackOff`                         | Pull secret not linked to the RHDH ServiceAccount — step 3.                                                                                                    |
 | Backend fails with `permissionsRegistry` undefined        | RHDH base is older than Backstage 1.39 — step 0.                                                                                                               |

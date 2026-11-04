@@ -23,7 +23,7 @@
     "clean": "backstage-cli package clean",
     "prepack": "backstage-cli package prepack",
     "postpack": "backstage-cli package postpack",
-    "export-dynamic": "rm -rf dist-dynamic && npx -y @red-hat-developer-hub/cli@latest plugin export --embed-package @cdops/plugin-tekton-trigger-common"
+    "export-dynamic": "rm -rf dist-dynamic && rhdh-cli plugin export --embed-package @cdops/plugin-tekton-trigger-common"
   },
   "dependencies": {
     "@backstage/catalog-model": "^1.10.2",
@@ -47,6 +47,7 @@
     "@backstage/dev-utils": "^1.1.28",
     "@backstage/plugin-permission-common": "^0.9.12",
     "@backstage/test-utils": "^1.7.23",
+    "@red-hat-developer-hub/cli": "1.10.8",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
