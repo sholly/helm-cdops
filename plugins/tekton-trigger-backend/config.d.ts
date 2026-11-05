@@ -113,6 +113,14 @@ export interface Config {
        */
       appParam?: string;
 
+      /**
+       * Pipeline parameter carrying the entity's `tekton.dev/environment`.
+       * Only entities that set that annotation pass it, and the pipeline must
+       * declare it. Overridden per entity by `tekton.dev/environment-param`.
+       * Defaults to `environment`.
+       */
+      environmentParam?: string;
+
       /** Offer git branches in the version dropdown. Defaults to true. */
       includeBranches?: boolean;
 

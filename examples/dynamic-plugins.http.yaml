@@ -64,6 +64,8 @@ plugins:
           versionParam: git-revision
           # Passed only when the pipeline declares it.
           appParam: argocd-app
+          # Carries tekton.dev/environment, for entities that set it.
+          environmentParam: environment
           # Which refs the dropdown offers, newest first.
           includeTags: true
           includeBranches: true

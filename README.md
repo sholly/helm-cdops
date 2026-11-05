@@ -271,6 +271,7 @@ tektonTrigger:
   deploy:
     versionParam: git-revision # the pipeline must declare this
     appParam: argocd-app # passed only when the pipeline declares it
+    environmentParam: environment # carries tekton.dev/environment
     includeTags: true
     includeBranches: true
     tagPattern: '^v\d+\.\d+\.\d+$' # optional: release tags only
@@ -317,17 +318,19 @@ are set.
 
 Tekton:
 
-| Annotation                   | Required | Purpose                                                           |
-| ---------------------------- | -------- | ----------------------------------------------------------------- |
-| `tekton.dev/pipeline`        | yes²     | Pipeline the deploy button runs                                   |
-| `tekton.dev/namespace`       | yes      | Namespace; falls back to `backstage.io/kubernetes-namespace`      |
-| `tekton.dev/cluster`         | no       | Entry in `tektonTrigger.clusters`; falls back to `defaultCluster` |
-| `tekton.dev/event-listener`  | no       | Trigger through Tekton Triggers instead                           |
-| `tekton.dev/version-param`   | no       | Parameter carrying the picked version; else `deploy.versionParam` |
-| `tekton.dev/app-param`       | no       | Parameter carrying the application name; else `deploy.appParam`   |
-| `tekton.dev/service-account` | no       | ServiceAccount for the TaskRuns                                   |
-| `tekton.dev/params`          | no       | JSON object of parameter values pinned by the catalog             |
-| `tekton.dev/workspaces`      | no       | JSON array passed through to `spec.workspaces`³                   |
+| Annotation                     | Required | Purpose                                                            |
+| ------------------------------ | -------- | ------------------------------------------------------------------ |
+| `tekton.dev/pipeline`          | yes²     | Pipeline the deploy button runs                                    |
+| `tekton.dev/namespace`         | yes      | Namespace; falls back to `backstage.io/kubernetes-namespace`       |
+| `tekton.dev/cluster`           | no       | Entry in `tektonTrigger.clusters`; falls back to `defaultCluster`  |
+| `tekton.dev/event-listener`    | no       | Trigger through Tekton Triggers instead                            |
+| `tekton.dev/version-param`     | no       | Parameter carrying the picked version; else `deploy.versionParam`  |
+| `tekton.dev/app-param`         | no       | Parameter carrying the application name; else `deploy.appParam`    |
+| `tekton.dev/service-account`   | no       | ServiceAccount for the TaskRuns                                    |
+| `tekton.dev/params`            | no       | JSON object of parameter values pinned by the catalog              |
+| `tekton.dev/environment`       | no       | Environment to deploy to, passed as the `environment` param        |
+| `tekton.dev/environment-param` | no       | Parameter carrying the environment; else `deploy.environmentParam` |
+| `tekton.dev/workspaces`        | no       | JSON array passed through to `spec.workspaces`³                    |
 
 ² Either `tekton.dev/pipeline` or `tekton.dev/event-listener`. An entity with
 ArgoCD annotations but no Tekton ones still gets the card and its deployed
@@ -339,6 +342,11 @@ state; the deploy button has nothing to run.
 The version parameter may not appear in `tekton.dev/params`: a pinned version
 would contradict the dropdown, so the backend rejects it with an explanation
 rather than silently ignoring the choice.
+
+`tekton.dev/environment` is pinned the same way `tekton.dev/params` values are:
+it is resolved from the catalog on every path, and a caller supplying its own
+`environment` is rejected rather than ignored. The pipeline must declare the
+parameter, or the trigger is rejected before anything is created.
 
 Full examples in
 [`examples/catalog-component.yaml`](examples/catalog-component.yaml).

@@ -21,6 +21,7 @@ import {
   ListPipelineRunsResponse,
   PipelineRunSummary,
   TEKTON_APP_PARAM_ANNOTATION,
+  TEKTON_ENVIRONMENT_PARAM_ANNOTATION,
   TEKTON_VERSION_PARAM_ANNOTATION,
   tektonPipelineCancelPermission,
   tektonPipelineReadPermission,
@@ -323,6 +324,18 @@ export async function createRouter(
       target.pipeline!,
     );
     const specs = toParamSpecs(pipeline, target.fixedParams);
+
+    // resolveParams only reads fixed values for params the pipeline declares,
+    // so without this an environment the entity asked for would be dropped in
+    // silence.
+    if (
+      target.environment !== undefined &&
+      !specs.some(spec => spec.name === target.environmentParam)
+    ) {
+      throw new InputError(
+        `Pipeline '${target.pipeline}' does not declare a parameter named '${target.environmentParam}'; set ${TEKTON_ENVIRONMENT_PARAM_ANNOTATION} or tektonTrigger.deploy.environmentParam to the parameter that carries the environment`,
+      );
+    }
 
     const supplied = args.withParams
       ? args.withParams(specs, true)

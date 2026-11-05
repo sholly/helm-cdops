@@ -11,6 +11,7 @@ export const DEFAULT_MAX_RUNS = 20;
 export const DEFAULT_SECRET_HEADER = 'X-Backstage-Token';
 export const DEFAULT_VERSION_PARAM = 'git-revision';
 export const DEFAULT_APP_PARAM = 'argocd-app';
+export const DEFAULT_ENVIRONMENT_PARAM = 'environment';
 export const DEFAULT_MAX_VERSIONS = 50;
 
 export type DashboardType = 'openshift' | 'tekton';
@@ -50,6 +51,8 @@ export interface DeployConfig {
   versionParam: string;
   /** Pipeline parameter carrying the ArgoCD application name, when declared. */
   appParam: string;
+  /** Pipeline parameter carrying the entity's `tekton.dev/environment`. */
+  environmentParam: string;
   /** Offer branches in the version dropdown. */
   includeBranches: boolean;
   /** Offer tags in the version dropdown. */
@@ -189,6 +192,9 @@ function readDeployConfig(config: Config | undefined): DeployConfig {
     versionParam:
       config?.getOptionalString('versionParam') ?? DEFAULT_VERSION_PARAM,
     appParam: config?.getOptionalString('appParam') ?? DEFAULT_APP_PARAM,
+    environmentParam:
+      config?.getOptionalString('environmentParam') ??
+      DEFAULT_ENVIRONMENT_PARAM,
     includeBranches: config?.getOptionalBoolean('includeBranches') ?? true,
     includeTags: config?.getOptionalBoolean('includeTags') ?? true,
     tagPattern,

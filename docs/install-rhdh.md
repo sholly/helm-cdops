@@ -364,6 +364,8 @@ plugins:
           # version picked in the card's dropdown.
           versionParam: git-revision
           appParam: argocd-app
+          # Carries tekton.dev/environment, for entities that set it.
+          environmentParam: environment
           includeTags: true
           includeBranches: true
           maxVersions: 50
@@ -823,19 +825,70 @@ metadata:
     tekton.dev/pipeline: deploy-version # required (or tekton.dev/event-listener)
     tekton.dev/namespace: cdops-ci # required; falls back to backstage.io/kubernetes-namespace
     tekton.dev/cluster: ocp-dev # optional; falls back to defaultCluster
+    tekton.dev/environment: prod # optional; passed as the `environment` param
 ```
 
 Optional: `tekton.dev/version-param` and `tekton.dev/app-param` (which pipeline
 parameters carry the picked version and the application name),
 `tekton.dev/service-account`, `tekton.dev/params` (JSON object of values pinned
 by the catalog — the backend rejects attempts to override them, and the version
-parameter may not appear there), `tekton.dev/workspaces` (JSON array passed
-through to `spec.workspaces`), `tekton.dev/event-listener`. Full examples in
+parameter may not appear there), `tekton.dev/environment` and
+`tekton.dev/environment-param` (see below), `tekton.dev/workspaces` (JSON array
+passed through to `spec.workspaces`), `tekton.dev/event-listener`. Full
+examples in
 [`examples/catalog-component.yaml`](../examples/catalog-component.yaml).
 
 The namespace must appear in that cluster's `allowedNamespaces`, or the request
 is rejected — that list is what stops someone editing a `catalog-info.yaml` to
 reach a namespace they shouldn't.
+
+### The environment parameter
+
+`tekton.dev/environment` names the environment an entity deploys to and reaches
+the pipeline as a parameter — `environment` by default:
+
+```yaml
+metadata:
+  annotations:
+    tekton.dev/environment: prod
+```
+
+```yaml
+# the pipeline must declare it
+spec:
+  params:
+    - name: environment
+      type: string
+```
+
+Rename the parameter per entity with `tekton.dev/environment-param`, or for
+every entity with `tektonTrigger.deploy.environmentParam`. Entity wins, then
+config, then `environment`.
+
+The value is resolved in `resolveTarget`, so it applies on all three paths —
+the card's deploy button, `POST /pipelineruns`, and the EventListener payload —
+and it is pinned exactly as `tekton.dev/params` values are: a caller supplying
+its own `environment` is rejected with `Parameter 'environment' is fixed by the
+catalog and cannot be overridden`, rather than having it quietly ignored.
+
+Two errors worth recognising:
+
+- `Pipeline '<name>' does not declare a parameter named 'environment'` — the
+  entity asked for an environment the pipeline cannot accept. Rejected before
+  anything is created, rather than dropped silently.
+- `Parameter 'environment' ... is set by both tekton.dev/environment and
+  tekton.dev/params; remove one` — both annotations pin the same parameter.
+  There is no precedence rule to remember; fix the entity.
+
+An entity that sets no `tekton.dev/environment` is untouched: the parameter is
+left out of the PipelineRun entirely, so a pipeline that declares it with a
+`default` falls back to that, and one that declares it as required rejects the
+deploy with `Parameter 'environment' is required`.
+
+On the EventListener path nothing validates the name against a Pipeline, so the
+TriggerTemplate has to declare `environment` and thread it through its binding,
+its template params and the PipelineRun spec. Miss a layer and the value is
+dropped without a word.
 
 ### Workspaces and `volumeClaimTemplate`
 
@@ -990,6 +1043,7 @@ tracking.
 | `Cluster '<x>' is not configured`                         | `tekton.dev/cluster` on the entity names a cluster that isn't in the config.                                                                                   |
 | Triggering works for everyone                             | `permission.enabled` is false or no policy grants/denies `tekton.pipeline.trigger` — step 6.                                                                   |
 | Unknown-parameter errors on trigger                       | Intentional: params are validated against the Pipeline's declared params, and overriding a `tekton.dev/params` value is rejected rather than silently dropped. |
+| `Pipeline ... does not declare a parameter named 'environment'` | The entity sets `tekton.dev/environment` but the Pipeline has no such param. Add it, or point `tekton.dev/environment-param` at the one that carries it — step 7. |
 | Deploy returns success, then the run fails at once with `InvalidWorkspaceBinding` | A workspace the Pipeline declares is unbound or misspelled in `tekton.dev/workspaces`, which is passed through unvalidated — step 7.                           |
 | `tekton.dev/workspaces` appears to be ignored             | The entity also has `tekton.dev/event-listener`, which takes precedence and sends `params` only. Bind workspaces in the TriggerTemplate — step 7.              |
 | x509 errors against the API server                        | Set `caData` (base64 PEM) or `caFile`. `skipTLSVerify: true` exists for dev only.                                                                              |

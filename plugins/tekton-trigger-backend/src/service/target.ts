@@ -7,6 +7,8 @@ import { InputError } from '@backstage/errors';
 import {
   KUBERNETES_NAMESPACE_ANNOTATION,
   TEKTON_CLUSTER_ANNOTATION,
+  TEKTON_ENVIRONMENT_ANNOTATION,
+  TEKTON_ENVIRONMENT_PARAM_ANNOTATION,
   TEKTON_EVENT_LISTENER_ANNOTATION,
   TEKTON_NAMESPACE_ANNOTATION,
   TEKTON_PARAMS_ANNOTATION,
@@ -40,6 +42,10 @@ export interface ResolvedTarget {
   serviceAccountName?: string;
   /** Parameter values pinned by the catalog; callers cannot override these. */
   fixedParams: Record<string, TektonParamValue>;
+  /** Environment from `tekton.dev/environment`, when the entity declares one. */
+  environment?: string;
+  /** Pipeline parameter `environment` is passed as. */
+  environmentParam: string;
   /** Workspace bindings passed through to `spec.workspaces`. */
   workspaces?: unknown[];
 }
@@ -118,10 +124,33 @@ export function resolveTarget(
     'array',
   );
 
+  // Resolved here rather than on the deploy route so that every path - deploy,
+  // plain trigger and EventListener - passes it, and so it inherits the
+  // override protection that fixedParams already has.
+  const environmentParam =
+    annotations[TEKTON_ENVIRONMENT_PARAM_ANNOTATION] ??
+    config.deploy.environmentParam;
+  const environment =
+    annotations[TEKTON_ENVIRONMENT_ANNOTATION]?.trim() || undefined;
+
+  if (environment !== undefined) {
+    // Both annotations pin the same parameter, so a value in each is a
+    // contradiction the entity's author should see rather than a precedence
+    // rule to memorise.
+    if (Object.prototype.hasOwnProperty.call(fixedParams, environmentParam)) {
+      throw new InputError(
+        `Parameter '${environmentParam}' on ${entityRef} is set by both ${TEKTON_ENVIRONMENT_ANNOTATION} and ${TEKTON_PARAMS_ANNOTATION}; remove one`,
+      );
+    }
+    fixedParams[environmentParam] = environment;
+  }
+
   const common = {
     entityRef,
     pipeline,
     fixedParams,
+    environment,
+    environmentParam,
     workspaces,
     serviceAccountName:
       annotations[TEKTON_SERVICE_ACCOUNT_ANNOTATION] ??

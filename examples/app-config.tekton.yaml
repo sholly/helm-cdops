@@ -60,6 +60,10 @@ tektonTrigger:
     # Passed only when the pipeline declares it, so a pipeline that handles
     # one application does not have to take it.
     appParam: argocd-app
+    # Pipeline parameter carrying tekton.dev/environment. Only entities that
+    # set that annotation pass it, and the pipeline must then declare it.
+    # Per entity: tekton.dev/environment-param.
+    environmentParam: environment
     # Which refs the dropdown offers, newest first.
     includeTags: true
     includeBranches: true

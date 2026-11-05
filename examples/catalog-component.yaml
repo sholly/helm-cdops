@@ -40,6 +40,12 @@ metadata:
     # ignore the choice.
     tekton.dev/version-param: git-revision
 
+    # Optional: the environment this component deploys to, passed to the
+    # pipeline as the `environment` parameter. The pipeline must declare it.
+    # Rename the parameter with tekton.dev/environment-param, or globally with
+    # tektonTrigger.deploy.environmentParam.
+    tekton.dev/environment: prod
+
     # Optional: parameter values pinned by the catalog. The backend rejects any
     # attempt to override these, and the version parameter may not appear here.
     tekton.dev/params: |

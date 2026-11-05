@@ -71,3 +71,17 @@ export const TEKTON_VERSION_PARAM_ANNOTATION = 'tekton.dev/version-param';
  * pipeline declares it.
  */
 export const TEKTON_APP_PARAM_ANNOTATION = 'tekton.dev/app-param';
+
+/**
+ * Environment the entity deploys to, e.g. `prod`. Passed to the pipeline as
+ * the parameter named by `tekton.dev/environment-param`. Pinned by the catalog
+ * the same way `tekton.dev/params` is, so a caller cannot override it.
+ */
+export const TEKTON_ENVIRONMENT_ANNOTATION = 'tekton.dev/environment';
+
+/**
+ * Name of the Tekton pipeline parameter that carries the environment. Defaults
+ * to `tektonTrigger.deploy.environmentParam`.
+ */
+export const TEKTON_ENVIRONMENT_PARAM_ANNOTATION =
+  'tekton.dev/environment-param';

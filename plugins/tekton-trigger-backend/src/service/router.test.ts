@@ -103,6 +103,27 @@ const eventListenerEntity: Entity = {
   spec: { type: 'website', lifecycle: 'production', owner: 'team-a' },
 };
 
+// Carries both ArgoCD and Tekton annotations so the environment can be checked
+// on the deploy route as well as the plain trigger route.
+const envEntity: Entity = {
+  apiVersion: 'backstage.io/v1alpha1',
+  kind: 'Component',
+  metadata: {
+    name: 'policy-api-prod',
+    namespace: 'default',
+    annotations: {
+      'tekton.dev/pipeline': 'build-and-deploy',
+      'tekton.dev/namespace': 'cdops-ci',
+      'tekton.dev/cluster': 'ocp-dev',
+      'tekton.dev/environment': 'prod',
+      'argocd/app-name': 'claims-api-prod',
+      'argocd/instance-name': 'main',
+      'tekton.dev/params': '{"git-url":"https://github.com/cdops/policy-api"}',
+    },
+  },
+  spec: { type: 'service', lifecycle: 'production', owner: 'team-a' },
+};
+
 const config = mockRootConfig({
   tektonTrigger: {
     defaultCluster: 'ocp-dev',
@@ -397,6 +418,209 @@ describe('tekton-trigger router', () => {
 
       expect(response.status).toBe(403);
       expect(client.createPipelineRun).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tekton.dev/environment', () => {
+    const envRef = 'component:default/policy-api-prod';
+
+    function clientWithEnvironmentParam() {
+      return {
+        getPipeline: jest.fn().mockResolvedValue({
+          ...pipeline,
+          spec: {
+            ...pipeline.spec,
+            params: [
+              ...(pipeline.spec?.params ?? []),
+              { name: 'environment', type: 'string' },
+            ],
+          },
+        }),
+      } as Partial<TektonApiClient>;
+    }
+
+    it('passes the annotated environment on the trigger route', async () => {
+      const { app, client } = await buildApp({
+        entities: [envEntity],
+        client: clientWithEnvironmentParam(),
+      });
+
+      const response = await request(app)
+        .post('/pipelineruns')
+        .send({ entityRef: envRef });
+
+      expect(response.status).toBe(201);
+      const created = (client.createPipelineRun as jest.Mock).mock.calls[0][1];
+      expect(created.spec.params).toEqual(
+        expect.arrayContaining([{ name: 'environment', value: 'prod' }]),
+      );
+    });
+
+    it('passes it on the deploy route as well', async () => {
+      const { app, client } = await buildApp({
+        entities: [envEntity],
+        client: clientWithEnvironmentParam(),
+      });
+
+      const response = await request(app)
+        .post('/deploy')
+        .send({ entityRef: envRef, version: 'v1.3.0' });
+
+      expect(response.status).toBe(201);
+      const created = (client.createPipelineRun as jest.Mock).mock.calls[0][1];
+      expect(created.spec.params).toEqual(
+        expect.arrayContaining([
+          { name: 'environment', value: 'prod' },
+          { name: 'git-revision', value: 'v1.3.0' },
+        ]),
+      );
+    });
+
+    it('sends it in the EventListener payload', async () => {
+      const elEntity: Entity = {
+        ...eventListenerEntity,
+        metadata: {
+          ...eventListenerEntity.metadata,
+          annotations: {
+            ...eventListenerEntity.metadata.annotations,
+            'tekton.dev/environment': 'prod',
+          },
+        },
+      };
+      const { app, eventListenerClient } = await buildApp({
+        entities: [elEntity],
+      });
+
+      const response = await request(app)
+        .post('/pipelineruns')
+        .send({ entityRef: 'component:default/claims-ui' });
+
+      expect(response.status).toBe(202);
+      expect(eventListenerClient.send).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'cdops-el' }),
+        expect.objectContaining({ params: { environment: 'prod' } }),
+      );
+    });
+
+    it('rejects a pipeline that declares no environment param', async () => {
+      const { app, client } = await buildApp({ entities: [envEntity] });
+
+      const response = await request(app)
+        .post('/pipelineruns')
+        .send({ entityRef: envRef });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.message).toMatch(/environment/);
+      expect(client.createPipelineRun).not.toHaveBeenCalled();
+    });
+
+    it('refuses to let a caller override it', async () => {
+      const { app, client } = await buildApp({
+        entities: [envEntity],
+        client: clientWithEnvironmentParam(),
+      });
+
+      const response = await request(app)
+        .post('/pipelineruns')
+        .send({ entityRef: envRef, params: { environment: 'dev' } });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.message).toMatch(/fixed by the catalog/);
+      expect(client.createPipelineRun).not.toHaveBeenCalled();
+    });
+
+    it('rejects an entity that sets the environment twice', async () => {
+      const conflicting: Entity = {
+        ...envEntity,
+        metadata: {
+          ...envEntity.metadata,
+          annotations: {
+            ...envEntity.metadata.annotations,
+            'tekton.dev/params': '{"environment":"dev"}',
+          },
+        },
+      };
+      const { app, client } = await buildApp({
+        entities: [conflicting],
+        client: clientWithEnvironmentParam(),
+      });
+
+      const response = await request(app)
+        .post('/pipelineruns')
+        .send({ entityRef: envRef });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.message).toMatch(/set by both/);
+      expect(client.createPipelineRun).not.toHaveBeenCalled();
+    });
+
+    it('honours a per-entity parameter name', async () => {
+      const renamed: Entity = {
+        ...envEntity,
+        metadata: {
+          ...envEntity.metadata,
+          annotations: {
+            ...envEntity.metadata.annotations,
+            'tekton.dev/environment-param': 'target-env',
+          },
+        },
+      };
+      const { app, client } = await buildApp({
+        entities: [renamed],
+        client: {
+          getPipeline: jest.fn().mockResolvedValue({
+            ...pipeline,
+            spec: {
+              ...pipeline.spec,
+              params: [
+                ...(pipeline.spec?.params ?? []),
+                { name: 'target-env', type: 'string' },
+              ],
+            },
+          }),
+        } as Partial<TektonApiClient>,
+      });
+
+      const response = await request(app)
+        .post('/pipelineruns')
+        .send({ entityRef: envRef });
+
+      expect(response.status).toBe(201);
+      const created = (client.createPipelineRun as jest.Mock).mock.calls[0][1];
+      expect(created.spec.params).toEqual(
+        expect.arrayContaining([{ name: 'target-env', value: 'prod' }]),
+      );
+    });
+
+    it('leaves an entity without the annotation alone', async () => {
+      // Declared with a default, so omitting it is valid and Tekton applies
+      // the pipeline's own value.
+      const { app, client } = await buildApp({
+        client: {
+          getPipeline: jest.fn().mockResolvedValue({
+            ...pipeline,
+            spec: {
+              ...pipeline.spec,
+              params: [
+                ...(pipeline.spec?.params ?? []),
+                { name: 'environment', type: 'string', default: 'dev' },
+              ],
+            },
+          }),
+        } as Partial<TektonApiClient>,
+      });
+
+      const response = await request(app)
+        .post('/pipelineruns')
+        .send({ entityRef: ref });
+
+      expect(response.status).toBe(201);
+      const created = (client.createPipelineRun as jest.Mock).mock.calls[0][1];
+      expect(created.spec.params).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'environment' }),
+        ]),
+      );
     });
   });
 
