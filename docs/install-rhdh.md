@@ -82,11 +82,16 @@ Both plugin `package.json` files previously defined:
 
 `@janus-idp/cli` is not a dependency anywhere in this repo and `yarn.lock` has
 no entry for it, so `yarn export-dynamic` failed with "command not found". The
-script now invokes the RHDH CLI directly:
+script now invokes the RHDH CLI's own binary:
 
 ```json
-"export-dynamic": "rm -rf dist-dynamic && npx -y @red-hat-developer-hub/cli@1.10.8 plugin export --embed-package @cdops/plugin-tekton-trigger-common"
+"export-dynamic": "rm -rf dist-dynamic && rhdh-cli plugin export --embed-package @cdops/plugin-tekton-trigger-common"
 ```
+
+`rhdh-cli` is the bin of `@red-hat-developer-hub/cli`, a devDependency of each
+plugin package (1c pins the version, 1d explains why it must not be an `npx -y`
+call). Yarn only exposes the bins of a workspace's own dependencies, so the
+devDependency belongs in each plugin's `package.json`, not the repo root.
 
 The leading `rm -rf dist-dynamic` is required, not housekeeping. The CLI picks
 its install mode from whether `dist-dynamic/yarn.lock` already exists: absent, it
@@ -229,9 +234,13 @@ yarn --cwd plugins/tekton-trigger-backend export-dynamic
 Each script runs, from that package's root:
 
 ```bash
-npx -y @red-hat-developer-hub/cli@1.10.8 plugin export \
+rm -rf dist-dynamic && rhdh-cli plugin export \
   --embed-package @cdops/plugin-tekton-trigger-common
 ```
+
+The backend adds `--embed-package @roadiehq/backstage-plugin-argo-cd-node`. See
+1b for why `rm -rf dist-dynamic` leads, and 1d for why this is `rhdh-cli` rather
+than an `npx -y` call.
 
 What `plugin export` does:
 

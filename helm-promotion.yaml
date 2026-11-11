@@ -1,0 +1,486 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: deploy-helm-by-revision
+  namespace: app-gitops
+spec:
+  params:
+    - default: v0.0.1
+      description: 'Deployment tag or branch (main, v1.0.0)'
+      name: git-revision
+      type: string
+    - default: testapi
+      description: Name of application
+      name: application
+      type: string
+    - default:
+        - group:app-gitops-approvers
+      description: >-
+        Users and/or groups allowed to approve the promotion gates. Use
+        group:<groupName> for a group, or a bare name for an individual user.
+      name: approvers
+      type: array
+    - default: '1'
+      description: Number of approvals required at each promotion gate
+      name: number-of-approvals
+      type: string
+
+  tasks:
+    # ---------------------------------------------------------------- TEST ---
+    - name: approval-test
+      params:
+        - name: approvers
+          value: $(params.approvers[*])
+        - name: numberOfApprovalsRequired
+          value: $(params.number-of-approvals)
+        - name: description
+          value: 'Approve deploy of $(params.application) $(params.git-revision) to TEST'
+      taskRef:
+        apiVersion: openshift-pipelines.org/v1alpha1
+        kind: ApprovalTask
+      timeout: 24h0m0s
+    - name: git-clone-test
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'true'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: URL
+          value: 'https://dev.azure.com/markelcorp/OpenShift%20Container%20Platform/_git/App-Gitops'
+        - name: REVISION
+          value: main
+        - name: REFSPEC
+          value: 'main:main'
+        - name: SUBMODULES
+          value: 'true'
+        - name: DEPTH
+          value: '1'
+        - name: SPARSE_CHECKOUT_DIRECTORIES
+          value: ''
+      runAfter:
+        - approval-test
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: output
+          workspace: workspace-helm
+    - name: openshift-client-test
+      params:
+        - name: SCRIPT
+          value: |
+            set -x
+            env|sort
+            ls -la ${WORKSPACES_MANIFEST_DIR_PATH}
+            TARGET=${WORKSPACES_MANIFEST_DIR_PATH}/test/argocd-app.yaml
+            oc patch --local --type merge -o yaml -f $TARGET -p '{"spec":{"source":{"targetRevision":"$(params.git-revision)"}}}' | tee /tmp/argocd-app.yaml
+            cp /tmp/argocd-app.yaml $TARGET
+        - name: VERSION
+          value: latest
+      runAfter:
+        - git-clone-test
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: manifest_dir
+          workspace: workspace-helm
+    - name: git-cli-test
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'false'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: GIT_USER_NAME
+          value: RHDH Plugin Bot
+        - name: GIT_USER_EMAIL
+          value: promoter@markel.com
+        - name: GIT_SCRIPT
+          value: |
+            git add test/argocd-app.yaml
+            if git commit -m "Bump $(params.application)-test to $(params.git-revision)"; then
+              git push origin main
+            fi
+      runAfter:
+        - openshift-client-test
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-cli
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: source
+          workspace: workspace-helm
+    - name: argocd-task-sync-and-wait-test
+      params:
+        - name: application-name
+          value: $(params.application)-root
+        - name: revision
+          value: HEAD
+        - name: flags
+          value: '--insecure'
+        - name: argocd-version
+          value: v2.2.2
+      runAfter:
+        - git-cli-test
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: argocd-task-sync-and-wait
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+
+    # ----------------------------------------------------------------- SIT ---
+    - name: approval-sit
+      params:
+        - name: approvers
+          value: $(params.approvers[*])
+        - name: numberOfApprovalsRequired
+          value: $(params.number-of-approvals)
+        - name: description
+          value: 'Approve deploy of $(params.application) $(params.git-revision) to SIT'
+      runAfter:
+        - argocd-task-sync-and-wait-test
+      taskRef:
+        apiVersion: openshift-pipelines.org/v1alpha1
+        kind: ApprovalTask
+      timeout: 24h0m0s
+    - name: git-clone-sit
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'true'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: URL
+          value: 'https://dev.azure.com/markelcorp/OpenShift%20Container%20Platform/_git/App-Gitops'
+        - name: REVISION
+          value: main
+        - name: REFSPEC
+          value: 'main:main'
+        - name: SUBMODULES
+          value: 'true'
+        - name: DEPTH
+          value: '1'
+        - name: SPARSE_CHECKOUT_DIRECTORIES
+          value: ''
+      runAfter:
+        - approval-sit
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: output
+          workspace: workspace-helm
+    - name: openshift-client-sit
+      params:
+        - name: SCRIPT
+          value: |
+            set -x
+            env|sort
+            ls -la ${WORKSPACES_MANIFEST_DIR_PATH}
+            TARGET=${WORKSPACES_MANIFEST_DIR_PATH}/sit/argocd-app.yaml
+            oc patch --local --type merge -o yaml -f $TARGET -p '{"spec":{"source":{"targetRevision":"$(params.git-revision)"}}}' | tee /tmp/argocd-app.yaml
+            cp /tmp/argocd-app.yaml $TARGET
+        - name: VERSION
+          value: latest
+      runAfter:
+        - git-clone-sit
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: manifest_dir
+          workspace: workspace-helm
+    - name: git-cli-sit
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'false'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: GIT_USER_NAME
+          value: RHDH Plugin Bot
+        - name: GIT_USER_EMAIL
+          value: promoter@markel.com
+        - name: GIT_SCRIPT
+          value: |
+            git add sit/argocd-app.yaml
+            if git commit -m "Bump $(params.application)-sit to $(params.git-revision)"; then
+              git push origin main
+            fi
+      runAfter:
+        - openshift-client-sit
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-cli
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: source
+          workspace: workspace-helm
+    - name: argocd-task-sync-and-wait-sit
+      params:
+        - name: application-name
+          value: $(params.application)-root
+        - name: revision
+          value: HEAD
+        - name: flags
+          value: '--insecure'
+        - name: argocd-version
+          value: v2.2.2
+      runAfter:
+        - git-cli-sit
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: argocd-task-sync-and-wait
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+
+    # ----------------------------------------------------------------- UAT ---
+    - name: approval-uat
+      params:
+        - name: approvers
+          value: $(params.approvers[*])
+        - name: numberOfApprovalsRequired
+          value: $(params.number-of-approvals)
+        - name: description
+          value: 'Approve deploy of $(params.application) $(params.git-revision) to UAT'
+      runAfter:
+        - argocd-task-sync-and-wait-sit
+      taskRef:
+        apiVersion: openshift-pipelines.org/v1alpha1
+        kind: ApprovalTask
+      timeout: 24h0m0s
+    - name: git-clone-uat
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'true'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: URL
+          value: 'https://dev.azure.com/markelcorp/OpenShift%20Container%20Platform/_git/App-Gitops'
+        - name: REVISION
+          value: main
+        - name: REFSPEC
+          value: 'main:main'
+        - name: SUBMODULES
+          value: 'true'
+        - name: DEPTH
+          value: '1'
+        - name: SPARSE_CHECKOUT_DIRECTORIES
+          value: ''
+      runAfter:
+        - approval-uat
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: output
+          workspace: workspace-helm
+    - name: openshift-client-uat
+      params:
+        - name: SCRIPT
+          value: |
+            set -x
+            env|sort
+            ls -la ${WORKSPACES_MANIFEST_DIR_PATH}
+            TARGET=${WORKSPACES_MANIFEST_DIR_PATH}/uat/argocd-app.yaml
+            oc patch --local --type merge -o yaml -f $TARGET -p '{"spec":{"source":{"targetRevision":"$(params.git-revision)"}}}' | tee /tmp/argocd-app.yaml
+            cp /tmp/argocd-app.yaml $TARGET
+        - name: VERSION
+          value: latest
+      runAfter:
+        - git-clone-uat
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: manifest_dir
+          workspace: workspace-helm
+    - name: git-cli-uat
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'false'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: GIT_USER_NAME
+          value: RHDH Plugin Bot
+        - name: GIT_USER_EMAIL
+          value: promoter@markel.com
+        - name: GIT_SCRIPT
+          value: |
+            git add uat/argocd-app.yaml
+            if git commit -m "Bump $(params.application)-uat to $(params.git-revision)"; then
+              git push origin main
+            fi
+      runAfter:
+        - openshift-client-uat
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-cli
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: source
+          workspace: workspace-helm
+    - name: argocd-task-sync-and-wait-uat
+      params:
+        - name: application-name
+          value: $(params.application)-root
+        - name: revision
+          value: HEAD
+        - name: flags
+          value: '--insecure'
+        - name: argocd-version
+          value: v2.2.2
+      runAfter:
+        - git-cli-uat
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: argocd-task-sync-and-wait
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+  workspaces:
+    - name: workspace-helm
