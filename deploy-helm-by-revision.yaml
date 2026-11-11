@@ -1,0 +1,159 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: deploy-helm-by-revision
+  namespace: app-gitops
+spec:
+  params:
+    - default: v0.0.1
+      description: 'Deployment tag or branch (main, v1.0.0)'
+      name: git-revision
+      type: string
+    - default: dummyapi-helm-dev
+      description: Name of application
+      name: application
+      type: string
+    - default: test
+      description: 'Deployment environment (test, sit, uat, prod)'
+      name: environment
+      type: string
+
+  tasks:
+    - name: git-clone
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'true'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: URL
+          value: 'https://dev.azure.com/markelcorp/OpenShift%20Container%20Platform/_git/App-Gitops'
+        - name: REVISION
+          value: main
+        - name: REFSPEC
+          value: 'main:main'
+        - name: SUBMODULES
+          value: 'true'
+        - name: DEPTH
+          value: '1'
+        - name: SPARSE_CHECKOUT_DIRECTORIES
+          value: ''
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: output
+          workspace: workspace-helm
+    - name: openshift-client
+      params:
+        - name: SCRIPT
+          value: |
+            set -x
+            env|sort
+            ls -la ${WORKSPACES_MANIFEST_DIR_PATH}
+            TARGET=${WORKSPACES_MANIFEST_DIR_PATH}/applications/DummyAPI-helm/$(params.environment)/deployments.yaml
+            oc patch --local --type merge -o yaml -f $TARGET -p '{"spec":{"source":{"targetRevision":"$(params.git-revision)"}}}' | tee /tmp/deployments.yaml
+            cp /tmp/deployments.yaml $TARGET
+        - name: VERSION
+          value: latest
+      runAfter:
+        - git-clone
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: manifest_dir
+          workspace: workspace-helm
+    - name: git-cli
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'false'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: GIT_USER_NAME
+          value: RHDH Plugin Bot
+        - name: GIT_USER_EMAIL
+          value: noemail@domain.com
+        - name: GIT_SCRIPT
+          value: |
+            git add applications/DummyAPI-helm/$(params.environment)/deployments.yaml
+            if git commit -m "Bump $(params.application)-$(params.environment) to $(params.git-revision)"; then
+              git push origin main
+            fi
+      runAfter:
+        - openshift-client
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-cli
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: source
+          workspace: workspace-helm
+    - name: argocd-task-sync-and-wait
+      params:
+        - name: application-name
+          value: $(params.application)-root
+        - name: revision
+          value: HEAD
+        - name: flags
+          value: '--insecure'
+        - name: argocd-version
+          value: v2.2.2
+      runAfter:
+        - git-cli
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: argocd-task-sync-and-wait
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+  workspaces:
+    - name: workspace-helm
+        
