@@ -60,7 +60,7 @@ spec:
         - name: SSL_VERIFY
           value: 'true'
         - name: URL
-          value: 'https://dev.azure.com/markelcorp/OpenShift%20Container%20Platform/_git/App-Gitops'
+          value: 'http://git.repo"
         - name: REVISION
           value: main
         - name: REFSPEC
@@ -134,7 +134,7 @@ spec:
         - name: GIT_USER_NAME
           value: RHDH Plugin Bot
         - name: GIT_USER_EMAIL
-          value: promoter@markel.com
+          value: promoter@somewhere.com
         - name: GIT_SCRIPT
           value: |
             git add test/argocd-app.yaml
