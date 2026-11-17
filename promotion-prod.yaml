@@ -1,0 +1,194 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: promotion-prod
+  namespace: app-gitops
+spec:
+  params:
+    - default: 'markel.jfrog.io/ids-docker-prod-local'
+      description: 'container image registry'
+      name: imageregistry
+      type: string
+    - default: 'dummyapi.host'
+      description: 'container image name'
+      name: imagename
+      type: string
+    - default: 0.0.2.90-latest
+      description: 'container image tag'
+      name: imagetag
+      type: string
+    - default: 'jbanks-workspace'
+      description: Name of workspace
+      name: workspace
+      type: string
+    - default: 'https://dev.azure.com/markelcorp/International%20DevOps/_git/jbanks-workspace-gitops'
+      description: Name of workspace repository
+      name: workspacerepo
+      type: string
+    - default: test1
+      description: Name of application
+      name: application
+      type: string
+    - default:
+        - aad-JShollenbergera@markelcorp.onmicrosoft.com
+      description: >-
+        Users and/or groups allowed to approve the promotion gates. Use
+        group:<groupName> for a group, or a bare name for an individual user.
+      name: approvers
+      type: array
+    - default: '1'
+      description: Number of approvals required at each promotion gate
+      name: number-of-approvals
+      type: string
+  tasks:
+    # ----------------------------------------------------------------- PROD ---
+    - name: approval-prod
+      params:
+        - name: approvers
+          value: $(params.approvers[*])
+        - name: numberOfApprovalsRequired
+          value: $(params.number-of-approvals)
+        - name: description
+          value: 'Approve deploy of $(params.application), image: $(params.imagename):$(params.imagetag) to SIT'
+      taskRef:
+        apiVersion: openshift-pipelines.org/v1alpha1
+        kind: ApprovalTask
+      timeout: 24h0m0s
+    - name: git-clone-prod
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'true'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: URL
+          value: '$(params.workspacerepo)'
+        - name: REVISION
+          value: main
+        - name: REFSPEC
+          value: 'main:main'
+        - name: SUBMODULES
+          value: 'true'
+        - name: DEPTH
+          value: '1'
+        - name: SPARSE_CHECKOUT_DIRECTORIES
+          value: ''
+      runAfter:
+        - approval-prod
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: output
+          workspace: workspace-helm
+    - name: openshift-client-prod
+      params:
+        - name: SCRIPT
+          value: |
+            set -x
+            env|sort
+            TARGET=${WORKSPACES_MANIFEST_DIR_PATH}/prod/$(params.application).yaml
+            oc patch --local --type merge -o yaml -f $TARGET -p '{"spec":{"source":{"helm":{"valuesObject":{"image":{"registry": "$(params.imageregistry)", "imageName": "$(params.imagename)", "tag": "$(params.imagetag)"} }}}}}' | tee /tmp/$(params.application).yaml
+            cp /tmp/$(params.application).yaml $TARGET
+        - name: VERSION
+          value: latest
+      runAfter:
+        - git-clone-prod
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: manifest_dir
+          workspace: workspace-helm
+    - name: git-cli-prod
+      params:
+        - name: CRT_FILENAME
+          value: ca-bundle.crt
+        - name: HTTP_PROXY
+          value: ''
+        - name: HTTPS_PROXY
+          value: ''
+        - name: NO_PROXY
+          value: ''
+        - name: SUBDIRECTORY
+          value: ''
+        - name: USER_HOME
+          value: /home/git
+        - name: DELETE_EXISTING
+          value: 'false'
+        - name: VERBOSE
+          value: 'false'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: GIT_USER_NAME
+          value: RHDH Plugin Bot
+        - name: GIT_USER_EMAIL
+          value: promoter@markel.com
+        - name: GIT_SCRIPT
+          value: |
+            git add prod/$(params.application).yaml
+            if git commit -m "Bump $(params.application)-prod to $(params.imagename):$(params.imagetag)"; then
+              git push origin main
+            fi
+      runAfter:
+        - openshift-client-prod
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-cli
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: source
+          workspace: workspace-helm
+    - name: argocd-task-sync-and-wait-prod
+      params:
+        - name: application-name
+          value: prod-$(params.workspace)-root
+        - name: revision
+          value: HEAD
+        - name: flags
+          value: '--insecure'
+        - name: argocd-version
+          value: v2.2.2
+      runAfter:
+        - git-cli-prod
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: argocd-task-sync-and-wait
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+  workspaces:
+    - name: workspace-helm
