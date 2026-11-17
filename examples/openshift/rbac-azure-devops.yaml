@@ -1,0 +1,98 @@
+# Least-privilege Tekton access for an Azure DevOps agent that creates
+# PipelineRuns with `oc`/`tkn` and a ServiceAccount token.
+#
+# This is a SEPARATE identity from the SA the TaskRuns themselves run as
+# (`taskRunTemplate.serviceAccountName`, usually `pipeline`). That one needs the
+# Azure Repos git credential and the ArgoCD env secret; this one only needs to
+# create a run and read it back.
+#
+# It is also broader than examples/openshift/rbac.yaml: `tkn pipelinerun logs`
+# reads the TaskRun pods' logs, which the RHDH plugin never does.
+#
+#   oc apply -n app-gitops -f examples/openshift/rbac-azure-devops.yaml
+#
+# Then read the token and the API server CA out for the ADO variable group:
+#
+#   oc get secret azure-devops-promoter-token -n app-gitops \
+#     -o jsonpath='{.data.token}' | base64 -d          # -> ocpToken (secret)
+#   oc get secret azure-devops-promoter-token -n app-gitops \
+#     -o jsonpath='{.data.ca\.crt}' | base64 -d        # -> ocpCaBundle (secret)
+#
+# Verify - all three must print `yes`:
+#
+#   for v in create get; do
+#     oc auth can-i $v pipelineruns.tekton.dev -n app-gitops \
+#       --as=system:serviceaccount:app-gitops:azure-devops-promoter
+#   done
+#   oc auth can-i get pods/log -n app-gitops \
+#     --as=system:serviceaccount:app-gitops:azure-devops-promoter
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: azure-devops-promoter
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+---
+# A non-expiring token, so it can be pinned into an ADO variable group or Key
+# Vault. `oc create token` issues a time-bound one instead and is the better
+# choice if your agents can mint a token per run. Treat the populated value as a
+# credential: revoking it means deleting this Secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: azure-devops-promoter-token
+  annotations:
+    kubernetes.io/service-account.name: azure-devops-promoter
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: azure-devops-promoter
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+rules:
+  # `tkn pipeline describe` / sanity-checking the pipeline exists before a run.
+  - apiGroups: ['tekton.dev']
+    resources: ['pipelines']
+    verbs: ['get', 'list']
+  # create the run, poll its Succeeded condition, patch spec.status to cancel
+  # when the ADO job is cancelled.
+  - apiGroups: ['tekton.dev']
+    resources: ['pipelineruns']
+    verbs: ['get', 'list', 'watch', 'create', 'patch']
+  - apiGroups: ['tekton.dev']
+    resources: ['taskruns']
+    verbs: ['get', 'list', 'watch']
+  # `tkn pipelinerun logs` resolves each TaskRun to its pod and tails it.
+  - apiGroups: ['']
+    resources: ['pods']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['']
+    resources: ['pods/log']
+    verbs: ['get']
+  # ONLY if the ADO job should approve the SIT/UAT gates itself rather than
+  # waiting for a human. Drop these three verbs to keep the gates manual, and
+  # note that the ServiceAccount must also appear in the `approvers` param.
+  - apiGroups: ['openshift-pipelines.org']
+    resources: ['approvaltasks']
+    verbs: ['get', 'list', 'patch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: azure-devops-promoter
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: azure-devops-promoter
+subjects:
+  - kind: ServiceAccount
+    name: azure-devops-promoter
+    # Must be the namespace this file is applied to.
+    namespace: app-gitops

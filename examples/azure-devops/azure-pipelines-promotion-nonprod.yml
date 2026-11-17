@@ -1,0 +1,167 @@
+# Triggers the `promotion-nonprod` Tekton pipeline (namespace app-gitops) from
+# Azure DevOps with oc/tkn and an OpenShift ServiceAccount token.
+#
+# The work is in promote-nonprod.sh next to this file; this YAML only collects
+# the inputs and maps the secrets. If you keep this pipeline in another repo,
+# either add that repo under `resources.repositories` and `checkout` both, or
+# copy the script in.
+#
+# Prerequisites
+#   - examples/openshift/rbac-azure-devops.yaml applied to app-gitops.
+#   - An ADO variable group `openshift-cdops` holding:
+#       ocpServer    https://api.<cluster>:6443
+#       ocpToken     the ServiceAccount token    (mark as secret)
+#       ocpCaBundle  the API server CA, PEM      (secret; empty for a public CA)
+#   - `oc` and `tkn` on the agent - the first step installs them if missing.
+#
+# The two 24h ApprovalTask gates (before SIT, before UAT) drive the design here;
+# read the notes at the bottom before turning waitForCompletion on.
+
+name: promote-${{ parameters.application }}-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger: none
+
+parameters:
+  - name: application
+    displayName: Application (manifest filename under test/, sit/, uat/)
+    type: string
+    default: test1
+  - name: imagename
+    displayName: Image name
+    type: string
+    default: dummyapi.host
+  - name: imagetag
+    displayName: Image tag
+    type: string
+    default: 0.0.2.90-latest
+  - name: imageregistry
+    displayName: Image registry
+    type: string
+    default: markel.jfrog.io/ids-docker-prod-local
+  - name: workspace
+    displayName: Workspace (prefixes the ArgoCD root app, e.g. test-<ws>-root)
+    type: string
+    default: jbanks-workspace
+  - name: workspacerepo
+    displayName: GitOps repository
+    type: string
+    default: https://dev.azure.com/markelcorp/International%20DevOps/_git/jbanks-workspace-gitops
+  - name: approvers
+    displayName: 'Approvers as a JSON array. group:<name> for a group'
+    type: string
+    default: '["aad-JShollenbergera@markelcorp.onmicrosoft.com"]'
+  - name: numberOfApprovals
+    displayName: Approvals required per gate
+    type: string
+    default: '1'
+  - name: waitForCompletion
+    displayName: Stream logs and fail this job if the PipelineRun fails
+    type: boolean
+    default: false
+  - name: jobTimeoutMinutes
+    displayName: ADO job timeout (0 = pool maximum)
+    type: number
+    default: 0
+
+variables:
+  - group: openshift-cdops
+  - name: ocpNamespace
+    value: app-gitops
+  # The in-cluster SA the TaskRuns execute as: it is the one that needs the
+  # Azure Repos git credential (git-clone, git-cli) and the ArgoCD env secret
+  # (argocd-task-sync-and-wait). NOT the SA whose token ADO logs in with.
+  - name: pipelineServiceAccount
+    value: pipeline
+  # Whole-run timeout. Must exceed the sum of the gate waits; Tekton's default
+  # of 1h would cancel the run while it sat on the SIT approval.
+  - name: tektonTimeout
+    value: 72h
+
+jobs:
+  - job: promote
+    displayName: Promote through test, SIT, UAT
+    timeoutInMinutes: ${{ parameters.jobTimeoutMinutes }}
+    pool:
+      # A Microsoft-hosted agent caps out well short of the gate waits, so only
+      # a self-hosted pool can hold the job open with waitForCompletion: true.
+      name: Default
+    steps:
+      - checkout: self
+
+      - bash: |
+          set -euo pipefail
+          BIN="${AGENT_TEMPDIRECTORY}/bin"
+          mkdir -p "${BIN}"
+          command -v oc >/dev/null || curl -sSfL "${OC_URL}" | tar -xz -C "${BIN}" oc
+          command -v tkn >/dev/null || curl -sSfL "${TKN_URL}" | tar -xz -C "${BIN}" tkn
+          echo "##vso[task.prependpath]${BIN}"
+        displayName: Ensure oc and tkn
+        env:
+          OC_URL: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz
+          TKN_URL: https://mirror.openshift.com/pub/openshift-v4/clients/pipelines/latest/tkn-linux-amd64.tar.gz
+
+      - bash: examples/azure-devops/promote-nonprod.sh
+        displayName: Create PipelineRun
+        env:
+          # Secret variables are not exported automatically; each one has to be
+          # mapped here by hand.
+          OCP_SERVER: $(ocpServer)
+          OCP_TOKEN: $(ocpToken)
+          OCP_CA_BUNDLE: $(ocpCaBundle)
+          OCP_NAMESPACE: $(ocpNamespace)
+          PIPELINE_SA: $(pipelineServiceAccount)
+          TEKTON_TIMEOUT: $(tektonTimeout)
+          IMAGE_REGISTRY: ${{ parameters.imageregistry }}
+          IMAGE_NAME: ${{ parameters.imagename }}
+          IMAGE_TAG: ${{ parameters.imagetag }}
+          WORKSPACE_NAME: ${{ parameters.workspace }}
+          WORKSPACE_REPO: ${{ parameters.workspacerepo }}
+          APPLICATION: ${{ parameters.application }}
+          APPROVERS: ${{ parameters.approvers }}
+          NUMBER_OF_APPROVALS: ${{ parameters.numberOfApprovals }}
+          WAIT: ${{ parameters.waitForCompletion }}
+
+      - bash: |
+          set -euo pipefail
+          # An unresolved ADO macro arrives as its own literal text, which is
+          # what happens when the job is cancelled before the run was created.
+          case "${RUN_NAME:-}" in '' | '$('*) exit 0 ;; esac
+          # Cancelling the ADO job should not leave the promotion running on.
+          oc patch pipelinerun "${RUN_NAME}" -n "${OCP_NAMESPACE}" \
+            --type merge -p '{"spec":{"status":"Cancelled"}}' || true
+        displayName: Cancel the PipelineRun if this job is cancelled
+        condition: canceled()
+        env:
+          OCP_NAMESPACE: $(ocpNamespace)
+          RUN_NAME: $(pipelineRunName)
+
+# ----------------------------------------------------------------------------
+# About the approval gates
+#
+# promotion-nonprod deploys test unattended, then parks on an ApprovalTask
+# before SIT and again before UAT, each with a 24h task timeout. So:
+#
+#   waitForCompletion: false (the default)
+#     ADO creates the run, prints its name and exits green. People approve in
+#     the OpenShift console, or with `opc approvaltask approve <name>`;
+#     `oc get approvaltasks -n app-gitops` lists what is pending. This is the
+#     right default - an ADO job is a poor place to hold a two-day wait, and a
+#     blocked job occupies a parallel-job slot the whole time.
+#
+#   waitForCompletion: true
+#     The job blocks through both gates. Needs a self-hosted pool with
+#     jobTimeoutMinutes: 0 and an agent you are willing to tie up for up to 48h.
+#     Reasonable if your approvers are quick, or if you strip the gates out.
+#
+# To put the approvals in ADO instead, drop the approval-sit and approval-uat
+# tasks from promotion-nonprod.yaml, split it per environment, and gate each
+# stage with an ADO environment check. Gates in both places means approving
+# twice.
+#
+# ADO cannot approve its own run unless the azure-devops-promoter SA is listed
+# in `approvers` and keeps the approvaltasks verbs in rbac-azure-devops.yaml -
+# at which point the gate has stopped being a human control.
+#
+# Runs created here carry the tekton.dev/pipeline=promotion-nonprod label that
+# Tekton sets from pipelineRef, so they appear in the RHDH tekton-trigger card
+# next to the ones the Deploy button creates.
