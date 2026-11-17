@@ -41,7 +41,7 @@ plugins:
             dashboardUrl: https://console-openshift-console.apps.ocp-dev.example.com
             dashboardType: openshift
             allowedNamespaces:
-              - cdops-ci
+              - app-gitops
               - cdops-build
           - name: ocp-prod
             url: https://api.ocp-prod.example.com:6443

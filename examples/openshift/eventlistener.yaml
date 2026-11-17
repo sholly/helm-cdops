@@ -2,14 +2,14 @@
 # under the cluster team's control: Developer Hub only posts an event and the
 # TriggerTemplate below decides what runs.
 #
-#   oc apply -n cdops-ci -f examples/openshift/eventlistener.yaml
+#   oc apply -n app-gitops -f examples/openshift/eventlistener.yaml
 #
 # The plugin POSTs this body:
 #   {
 #     "source": "backstage-tekton-trigger",
 #     "entityRef": "component:default/claims-ui",
 #     "pipeline": "build-and-deploy",
-#     "namespace": "cdops-ci",
+#     "namespace": "app-gitops",
 #     "triggeredBy": "user:default/jay",
 #     "params": { "git-revision": "main" }
 #   }
@@ -18,7 +18,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: developer-hub-trigger-secret
-  namespace: cdops-ci
+  namespace: app-gitops
 type: Opaque
 stringData:
   # Must match tektonTrigger.eventListeners[].secret.
@@ -28,7 +28,7 @@ apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerBinding
 metadata:
   name: developer-hub
-  namespace: cdops-ci
+  namespace: app-gitops
 spec:
   params:
     - name: entity-ref
@@ -42,7 +42,7 @@ apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerTemplate
 metadata:
   name: developer-hub
-  namespace: cdops-ci
+  namespace: app-gitops
 spec:
   params:
     - name: entity-ref
@@ -83,8 +83,8 @@ spec:
 apiVersion: triggers.tekton.dev/v1beta1
 kind: EventListener
 metadata:
-  name: cdops-ci
-  namespace: cdops-ci
+  name: app-gitops
+  namespace: app-gitops
 spec:
   serviceAccountName: pipeline
   triggers:
@@ -111,12 +111,12 @@ spec:
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: el-cdops-ci
-  namespace: cdops-ci
+  name: el-app-gitops
+  namespace: app-gitops
 spec:
   to:
     kind: Service
-    name: el-cdops-ci
+    name: el-app-gitops
   port:
     targetPort: http-listener
   tls:

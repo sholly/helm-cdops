@@ -352,7 +352,7 @@ plugins:
             dashboardUrl: https://console-openshift-console.apps.ocp-dev.example.com
             dashboardType: openshift
             allowedNamespaces:
-              - cdops-ci
+              - app-gitops
               - cdops-build
           - name: ocp-prod
             url: https://api.ocp-prod.example.com:6443
@@ -570,7 +570,7 @@ RHDH_SA=$(oc get deploy <rhdh-deployment> -n "$RHDH_NS" \
 RHDH_SA=${RHDH_SA:-default}   # unset means the pod runs as `default`
 echo "$RHDH_SA"
 
-for ns in cdops-ci cdops-build; do
+for ns in app-gitops cdops-build; do
   oc apply -n "$ns" -f examples/openshift/rbac.yaml
   sed -e "s|REPLACE_RHDH_NAMESPACE|$RHDH_NS|" \
       -e "s|REPLACE_RHDH_SERVICEACCOUNT|$RHDH_SA|" \
@@ -642,7 +642,7 @@ This must print `yes` four times:
 
 ```bash
 for v in get:pipelines create:pipelineruns patch:pipelineruns get:taskruns; do
-  oc auth can-i "${v%%:*}" "${v##*:}.tekton.dev" -n cdops-ci \
+  oc auth can-i "${v%%:*}" "${v##*:}.tekton.dev" -n app-gitops \
     --as="system:serviceaccount:$RHDH_NS:$RHDH_SA"
 done
 ```
@@ -832,7 +832,7 @@ metadata:
     argocd/project-name: policy # required if the repo is project-scoped
     # what the deploy button runs
     tekton.dev/pipeline: deploy-version # required (or tekton.dev/event-listener)
-    tekton.dev/namespace: cdops-ci # required; falls back to backstage.io/kubernetes-namespace
+    tekton.dev/namespace: app-gitops # required; falls back to backstage.io/kubernetes-namespace
     tekton.dev/cluster: ocp-dev # optional; falls back to defaultCluster
     tekton.dev/environment: prod # optional; passed as the `environment` param
 ```
@@ -980,11 +980,11 @@ you put in `tektonTrigger.eventListeners[].secret`), and add the
 ```yaml
 eventListeners:
   - name: cdops-el
-    url: http://el-cdops-ci.cdops-ci.svc.cluster.local:8080
+    url: http://el-app-gitops.app-gitops.svc.cluster.local:8080
     secret: ${TEKTON_EVENT_LISTENER_SECRET}
     secretHeader: X-Backstage-Token
     cluster: ocp-dev
-    namespace: cdops-ci
+    namespace: app-gitops
 ```
 
 Tekton's CEL interceptor cannot read a Secret, so the shared secret is compared

@@ -2,12 +2,7 @@
 
 Broadly, there are 3 main ways to accomplish this task.  
 
-* 1.  Openshift/Tekton CLI on an agent with a Service Account Token
-ADO creates a PipelineRun, streams the logs and fails the ADO job if Tekton fails.
-
-
 The following setup applies to options 1 and 2: 
-
 ```
 - bash: |
     set -euo pipefail
@@ -39,8 +34,20 @@ The following setup applies to options 1 and 2:
     OCP_SERVER: $(ocpServer)
 ```
 
+* 1.  Openshift/Tekton CLI on an agent with a Service Account Token
+ADO creates a PipelineRun, streams the logs and fails the ADO job if Tekton fails.
+
+This option involves running the setup above.  This option requires the Openshift CLI 'oc', and the Tekton CLI 'tkn'.  It also requires an Openshift  ServiceAccount token.  Azure Devops will also require Openshift API server access to the cluster running pipelines.  This option will also stream the build logs back to the Azure pipeline, and report back on the status of the Pipeline run. 
+
+
 * 2.  Openshift/Tekton CLI on an agent with an ADO Kubernetes Service connection. 
 
+This option essentially does the same as Option 1, but with a Kubernetes Service Connection. I would argue that the Service Connection is the better approach for the following reasons: 
+* The secret lives inside the service connection. 
+* Built-in Azure Devops tasks can use it withouth further effort.  
+* Key rotation just involves updating the Service Connection.     
+
+Example ADO pipeline snippet.  
 ```
 - task: Kubernetes@1
   inputs:
@@ -53,21 +60,10 @@ The following setup applies to options 1 and 2:
 
 * 3.  Webhook to a Tekton Triggers EventListener
 
-```
-apiVersion: triggers.tekton.dev/v1beta1
-kind: EventListener
-metadata: { name: azdo-listener, namespace: my-ns }
-spec:
-  serviceAccountName: pipeline
-  triggers:
-    - name: azdo
-      interceptors:
-        - ref: { name: cel }
-          params:
-            - name: filter
-              value: "header.canonical('X-Azdo-Token').compareSecret('token', 'azdo-webhook-secret')"
-      bindings:
-        - { name: git-revision, value: $(body.revision) }
-        - { name: build-id,     value: $(body.buildId) }
-      template: { ref: build-and-deploy-template }   
-```
+This involves setting up a TektonTrigger, EventListener, and the associated Openshift Route for an external route that Azure pipelines can call and start Tekton pipelines.  This option will require more work upfront, as the supporting Tekton objects need to be created, as well as the Markel DNS entry and TLS certificate.  
+
+The big advantage is that whatever system calls the EventListener/Route is ONLY authorized to run whatever pipeline the EventListener is authorized to run.  Whereas the oc & tkn client has access to do whatever the caller's serviceacocunt is authorized to do.  
+
+The big disadvantage is that the EventListener style of starting pipelines is 'fire-and-forget'.  There is no way of monitoring the Tekton pipeline for success, one has to trust that the triggered Tekton pipeline will be successful.  
+
+The examples/azure-devops and examples/openshift directories have further examples on how to configure things.  

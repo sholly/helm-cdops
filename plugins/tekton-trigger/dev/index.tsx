@@ -13,7 +13,7 @@ const entity: Entity = {
     namespace: 'default',
     annotations: {
       'tekton.dev/pipeline': 'build-and-deploy',
-      'tekton.dev/namespace': 'cdops-ci',
+      'tekton.dev/namespace': 'app-gitops',
       'tekton.dev/cluster': 'ocp-dev',
       'argocd/app-name': 'policy-api-prod',
       'argocd/instance-name': 'main',

@@ -222,7 +222,7 @@ of the three sets a namespace, so `oc apply -n` decides where objects land.
   RHDH_NS=<rhdh-namespace>
   RHDH_SA=$(oc get deploy <rhdh-deployment> -n "$RHDH_NS" \
     -o jsonpath='{.spec.template.spec.serviceAccountName}')
-  for ns in cdops-ci cdops-build; do
+  for ns in app-gitops cdops-build; do
     oc apply -n "$ns" -f examples/openshift/rbac.yaml
     sed -e "s|REPLACE_RHDH_NAMESPACE|$RHDH_NS|" \
         -e "s|REPLACE_RHDH_SERVICEACCOUNT|${RHDH_SA:-default}|" \
@@ -248,7 +248,7 @@ of the three sets a namespace, so `oc apply -n` decides where objects land.
 Verify either way, per namespace:
 
 ```bash
-oc auth can-i create pipelineruns.tekton.dev -n cdops-ci \
+oc auth can-i create pipelineruns.tekton.dev -n app-gitops \
   --as="system:serviceaccount:<rhdh-namespace>:<rhdh-serviceaccount>"
 ```
 
@@ -300,7 +300,7 @@ metadata:
     argocd/app-name: policy-api-prod
     # what the deploy button runs
     tekton.dev/pipeline: deploy-version
-    tekton.dev/namespace: cdops-ci
+    tekton.dev/namespace: app-gitops
 ```
 
 ArgoCD, matching the Roadie ArgoCD plugins' annotations:

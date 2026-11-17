@@ -17,9 +17,11 @@
 #                examples/openshift/rbac-azure-devops.yaml, and the RBAC the
 #                connection gets is exactly that file's Role.)
 #
-# Name it `openshift-cdops` to match `kubernetesServiceConnection` below. A new
-# connection is not authorized for this pipeline until someone permits it on the
-# first run, or you tick "Grant access permission to all pipelines".
+# Name it `openshift-cdops-k8s` to match `kubernetesServiceConnection` below -
+# distinct from the `openshift-cdops` variable GROUP the token-based pipeline
+# uses, which holds a different thing. A new connection is not authorized for
+# this pipeline until someone permits it on the first run, or you tick "Grant
+# access permission to all pipelines".
 #
 # If you keep this pipeline in another repo, either add that repo under
 # `resources.repositories` and `checkout` both, or copy promote-nonprod.sh in.
@@ -75,7 +77,7 @@ parameters:
 
 variables:
   - name: kubernetesServiceConnection
-    value: openshift-cdops
+    value: openshift-cdops-k8s
   - name: ocpNamespace
     value: app-gitops
   # The in-cluster SA the TaskRuns execute as: it is the one that needs the

@@ -6,7 +6,7 @@
 #
 # No namespace is set on any object, so `oc apply -n` decides where it lands:
 #
-#   for ns in cdops-ci cdops-build; do
+#   for ns in app-gitops cdops-build; do
 #     oc apply -n "$ns" -f examples/openshift/rbac.yaml
 #   done
 #

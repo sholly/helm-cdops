@@ -20,7 +20,7 @@ import { ArgoApplicationSummary } from '@cdops/plugin-tekton-trigger-common';
 import { ArgoServiceApi } from '@roadiehq/backstage-plugin-argo-cd-node';
 
 const pipeline: PipelineResource = {
-  metadata: { name: 'build-and-deploy', namespace: 'cdops-ci' },
+  metadata: { name: 'build-and-deploy', namespace: 'app-gitops' },
   spec: {
     params: [
       { name: 'git-url', type: 'string', description: 'Repository to build' },
@@ -39,7 +39,7 @@ const entity: Entity = {
     namespace: 'default',
     annotations: {
       'tekton.dev/pipeline': 'build-and-deploy',
-      'tekton.dev/namespace': 'cdops-ci',
+      'tekton.dev/namespace': 'app-gitops',
       'tekton.dev/cluster': 'ocp-dev',
       'tekton.dev/params': '{"git-url":"https://github.com/cdops/policy-api"}',
     },
@@ -55,7 +55,7 @@ const argoEntity: Entity = {
     namespace: 'default',
     annotations: {
       'tekton.dev/pipeline': 'build-and-deploy',
-      'tekton.dev/namespace': 'cdops-ci',
+      'tekton.dev/namespace': 'app-gitops',
       'tekton.dev/cluster': 'ocp-dev',
       'argocd/app-name': 'claims-api-prod',
       'argocd/instance-name': 'main',
@@ -97,7 +97,7 @@ const eventListenerEntity: Entity = {
     namespace: 'default',
     annotations: {
       'tekton.dev/event-listener': 'cdops-el',
-      'tekton.dev/namespace': 'cdops-ci',
+      'tekton.dev/namespace': 'app-gitops',
     },
   },
   spec: { type: 'website', lifecycle: 'production', owner: 'team-a' },
@@ -113,7 +113,7 @@ const envEntity: Entity = {
     namespace: 'default',
     annotations: {
       'tekton.dev/pipeline': 'build-and-deploy',
-      'tekton.dev/namespace': 'cdops-ci',
+      'tekton.dev/namespace': 'app-gitops',
       'tekton.dev/cluster': 'ocp-dev',
       'tekton.dev/environment': 'prod',
       'argocd/app-name': 'claims-api-prod',
@@ -133,7 +133,7 @@ const config = mockRootConfig({
         url: 'https://api.ocp-dev.example.com:6443',
         serviceAccountToken: 'token',
         dashboardUrl: 'https://console.apps.ocp-dev.example.com',
-        allowedNamespaces: ['cdops-ci'],
+        allowedNamespaces: ['app-gitops'],
       },
     ],
     eventListeners: [
@@ -153,7 +153,7 @@ function pipelineRun(
   return {
     metadata: {
       name: 'build-and-deploy-abc12',
-      namespace: 'cdops-ci',
+      namespace: 'app-gitops',
       labels: { 'tekton.dev/pipeline': 'build-and-deploy' },
       ...overrides.metadata,
     },
@@ -260,10 +260,10 @@ describe('tekton-trigger router', () => {
       expect(response.body).toMatchObject({
         mode: 'pipelineRun',
         cluster: 'ocp-dev',
-        namespace: 'cdops-ci',
+        namespace: 'app-gitops',
         pipeline: 'build-and-deploy',
         consoleUrl:
-          'https://console.apps.ocp-dev.example.com/k8s/ns/cdops-ci/tekton.dev~v1~Pipeline/build-and-deploy',
+          'https://console.apps.ocp-dev.example.com/k8s/ns/app-gitops/tekton.dev~v1~Pipeline/build-and-deploy',
       });
       expect(response.body.params).toEqual([
         expect.objectContaining({ name: 'git-url', fixed: true }),
@@ -324,18 +324,18 @@ describe('tekton-trigger router', () => {
           name: 'build-and-deploy-abc12',
           status: 'Running',
           consoleUrl:
-            'https://console.apps.ocp-dev.example.com/k8s/ns/cdops-ci/tekton.dev~v1~PipelineRun/build-and-deploy-abc12/logs',
+            'https://console.apps.ocp-dev.example.com/k8s/ns/app-gitops/tekton.dev~v1~PipelineRun/build-and-deploy-abc12/logs',
         },
       });
 
       expect(client.createPipelineRun).toHaveBeenCalledWith(
-        'cdops-ci',
+        'app-gitops',
         expect.objectContaining({
           apiVersion: 'tekton.dev/v1',
           kind: 'PipelineRun',
           metadata: expect.objectContaining({
             generateName: 'build-and-deploy-',
-            namespace: 'cdops-ci',
+            namespace: 'app-gitops',
             labels: expect.objectContaining({
               'app.kubernetes.io/managed-by': 'backstage-tekton-trigger',
               'backstage.io/entity-kind': 'component',
@@ -632,7 +632,7 @@ describe('tekton-trigger router', () => {
             pipelineRun({
               metadata: {
                 name: 'older',
-                namespace: 'cdops-ci',
+                namespace: 'app-gitops',
                 labels: { 'tekton.dev/pipeline': 'build-and-deploy' },
               },
               status: {
@@ -642,7 +642,7 @@ describe('tekton-trigger router', () => {
               },
             }),
             pipelineRun({
-              metadata: { name: 'newer', namespace: 'cdops-ci' },
+              metadata: { name: 'newer', namespace: 'app-gitops' },
             }),
           ]),
         } as Partial<TektonApiClient>,
@@ -662,7 +662,7 @@ describe('tekton-trigger router', () => {
         durationMs: 300_000,
       });
       expect(client.listPipelineRuns).toHaveBeenCalledWith({
-        namespace: 'cdops-ci',
+        namespace: 'app-gitops',
         labelSelector: 'tekton.dev/pipeline=build-and-deploy',
       });
     });
@@ -679,7 +679,7 @@ describe('tekton-trigger router', () => {
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('Cancelled');
       expect(client.cancelPipelineRun).toHaveBeenCalledWith(
-        'cdops-ci',
+        'app-gitops',
         'build-and-deploy-abc12',
       );
     });
@@ -691,7 +691,7 @@ describe('tekton-trigger router', () => {
             pipelineRun({
               metadata: {
                 name: 'someone-elses-run',
-                namespace: 'cdops-ci',
+                namespace: 'app-gitops',
                 labels: { 'tekton.dev/pipeline': 'other-pipeline' },
               },
             }),

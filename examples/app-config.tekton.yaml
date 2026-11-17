@@ -21,7 +21,7 @@ tektonTrigger:
       dashboardType: openshift
       # Defence in depth: entities may only point at these namespaces.
       allowedNamespaces:
-        - cdops-ci
+        - app-gitops
         - cdops-build
 
     - name: ocp-prod
@@ -36,11 +36,11 @@ tektonTrigger:
   # instead of creating a PipelineRun directly.
   eventListeners:
     - name: cdops-el
-      url: https://el-cdops-ci.apps.ocp-dev.example.com
+      url: https://el-app-gitops.apps.ocp-dev.example.com
       secret: ${TEKTON_EVENT_LISTENER_SECRET}
       secretHeader: X-Backstage-Token
       cluster: ocp-dev
-      namespace: cdops-ci
+      namespace: app-gitops
 
   # Applied to every PipelineRun the plugin creates.
   pipelineRun:

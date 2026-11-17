@@ -26,7 +26,7 @@ metadata:
 
     # Required: namespace holding the pipeline.
     # backstage.io/kubernetes-namespace is used as a fallback.
-    tekton.dev/namespace: cdops-ci
+    tekton.dev/namespace: app-gitops
 
     # Optional: which entry in tektonTrigger.clusters to use.
     tekton.dev/cluster: ocp-dev
@@ -86,7 +86,7 @@ metadata:
     # whichever environment the user picked.
     tekton.dev/app-param: argocd-app
     tekton.dev/pipeline: deploy-version
-    tekton.dev/namespace: cdops-ci
+    tekton.dev/namespace: app-gitops
 spec:
   type: website
   lifecycle: production
@@ -102,7 +102,7 @@ metadata:
   annotations:
     argocd/app-name: billing-api-prod
     tekton.dev/event-listener: cdops-el
-    tekton.dev/namespace: cdops-ci
+    tekton.dev/namespace: app-gitops
     # Still useful: lets the card list the runs the EventListener creates.
     tekton.dev/pipeline: deploy-version
 spec:

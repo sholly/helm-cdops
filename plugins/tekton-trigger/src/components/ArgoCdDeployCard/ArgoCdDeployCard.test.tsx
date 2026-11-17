@@ -26,7 +26,7 @@ const entity: Entity = {
     namespace: 'default',
     annotations: {
       'tekton.dev/pipeline': 'build-and-deploy',
-      'tekton.dev/namespace': 'cdops-ci',
+      'tekton.dev/namespace': 'app-gitops',
       'argocd/app-name': 'policy-api-prod',
     },
   },
@@ -51,7 +51,7 @@ const app: ArgoApplicationSummary = {
 
 const run: PipelineRunSummary = {
   name: 'build-and-deploy-abc12',
-  namespace: 'cdops-ci',
+  namespace: 'app-gitops',
   cluster: 'ocp-dev',
   pipeline: 'build-and-deploy',
   status: 'Succeeded',
