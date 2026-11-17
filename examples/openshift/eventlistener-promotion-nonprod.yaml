@@ -1,0 +1,294 @@
+# Tekton Triggers path for running `promotion-nonprod` from Azure DevOps: ADO
+# POSTs a small JSON body and the TriggerTemplate below decides what runs. The
+# ADO side needs no cluster credential at all - only a URL and a shared secret.
+#
+#   oc apply -n app-gitops -f examples/openshift/eventlistener-promotion-nonprod.yaml
+#
+# Everything that is a governance decision - which pipeline, which
+# ServiceAccount, the approvers, the run timeout, the workspace binding - lives
+# here, under the cluster team's control. The payload carries only what varies
+# per build: the application and the image coordinates.
+#
+# ADO POSTs this body (see examples/azure-devops/trigger-promotion-webhook.sh):
+#   {
+#     "source": "azure-devops",
+#     "application": "test1",
+#     "imageregistry": "markel.jfrog.io/ids-docker-prod-local",
+#     "imagename": "dummyapi.host",
+#     "imagetag": "0.0.2.90-latest",
+#     "workspace": "jbanks-workspace",
+#     "workspacerepo": "https://dev.azure.com/...",
+#     "buildId": "4812",
+#     "buildUrl": "https://dev.azure.com/.../_build/results?buildId=4812",
+#     "requestedBy": "A Developer"
+#   }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: azure-devops-webhook-secret
+  namespace: app-gitops
+type: Opaque
+stringData:
+  # The value ADO sends in the X-Azdo-Token header. Replace it, and keep it out
+  # of git in a real deployment - this file is a template, not a vault.
+  #
+  #   oc create secret generic azure-devops-webhook-secret -n app-gitops \
+  #     --from-literal=token="$(openssl rand -hex 32)"
+  token: replace-me
+---
+# The EventListener's own identity. It is the one that creates the PipelineRun,
+# so it needs `create` on pipelineruns - unlike the oc/tkn paths, where the ADO
+# agent creates the run itself.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tekton-triggers-azure-devops
+  namespace: app-gitops
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+---
+# OpenShift Pipelines ships ClusterRoles for this (look for
+# `oc get clusterrole | grep tekton-triggers`), but the rules are short enough
+# to state outright, which avoids depending on names that move between
+# operator versions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tekton-triggers-azure-devops
+  namespace: app-gitops
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+rules:
+  # Read its own configuration at startup and on change.
+  - apiGroups: ['triggers.tekton.dev']
+    resources:
+      ['eventlisteners', 'triggers', 'triggerbindings', 'triggertemplates', 'interceptors']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['']
+    resources: ['configmaps']
+    verbs: ['get', 'list', 'watch']
+  # What the TriggerTemplate produces.
+  - apiGroups: ['tekton.dev']
+    resources: ['pipelineruns']
+    verbs: ['create']
+  # compareSecret() in the CEL filter reads the shared secret at request time.
+  # Scoped to the one Secret, so this is not a general secret-reading grant.
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['get']
+    resourceNames: ['azure-devops-webhook-secret']
+  # The sink records Events for rejected and failed triggers; without this the
+  # rejections are harder to debug.
+  - apiGroups: ['']
+    resources: ['events']
+    verbs: ['create', 'patch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tekton-triggers-azure-devops
+  namespace: app-gitops
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tekton-triggers-azure-devops
+subjects:
+  - kind: ServiceAccount
+    name: tekton-triggers-azure-devops
+    namespace: app-gitops
+---
+# Cluster-scoped because ClusterInterceptors (which is what `ref: {name: cel}`
+# resolves to) are not namespaced. Read-only, and only these two kinds.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tekton-triggers-azure-devops
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+rules:
+  - apiGroups: ['triggers.tekton.dev']
+    resources: ['clustertriggerbindings', 'clusterinterceptors']
+    verbs: ['get', 'list', 'watch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tekton-triggers-azure-devops
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tekton-triggers-azure-devops
+subjects:
+  - kind: ServiceAccount
+    name: tekton-triggers-azure-devops
+    namespace: app-gitops
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: azure-devops-promotion
+  namespace: app-gitops
+spec:
+  params:
+    - name: application
+      value: $(body.application)
+    - name: imageregistry
+      value: $(body.imageregistry)
+    - name: imagename
+      value: $(body.imagename)
+    - name: imagetag
+      value: $(body.imagetag)
+    - name: workspace
+      value: $(body.workspace)
+    - name: workspacerepo
+      value: $(body.workspacerepo)
+    # Provenance only. build-id becomes a label, so the ADO job can be told how
+    # to find its run later; the rest become annotations.
+    - name: build-id
+      value: $(body.buildId)
+    - name: build-url
+      value: $(body.buildUrl)
+    - name: requested-by
+      value: $(body.requestedBy)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: promotion-nonprod
+  namespace: app-gitops
+spec:
+  params:
+    - name: application
+    - name: imagename
+    - name: imagetag
+    # The rest match the Pipeline's own defaults, so a payload may omit them.
+    - name: imageregistry
+      default: markel.jfrog.io/ids-docker-prod-local
+    - name: workspace
+      default: jbanks-workspace
+    - name: workspacerepo
+      default: https://dev.azure.com/markelcorp/International%20DevOps/_git/jbanks-workspace-gitops
+    - name: build-id
+      default: unknown
+    - name: build-url
+      default: ''
+    - name: requested-by
+      default: ''
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: promotion-nonprod-
+        labels:
+          app.kubernetes.io/managed-by: azure-devops
+          # The handle the ADO job prints for later lookup. Triggers also stamps
+          # triggers.tekton.dev/triggers-eventid with the eventID it returned.
+          azure-devops/build-id: $(tt.params.build-id)
+        annotations:
+          azure-devops/build-url: $(tt.params.build-url)
+          azure-devops/requested-by: $(tt.params.requested-by)
+      spec:
+        pipelineRef:
+          name: promotion-nonprod
+        taskRunTemplate:
+          # Needs the Azure Repos git credential (git-clone, git-cli) and the
+          # ArgoCD env secret (argocd-task-sync-and-wait). A different identity
+          # from the EventListener's SA above, which only creates the run.
+          serviceAccountName: pipeline
+        timeouts:
+          # Tekton defaults a run to 1h, which would cancel it while it was
+          # still parked on the SIT approval. Must exceed the gate waits.
+          pipeline: 72h0m0s
+        params:
+          - name: application
+            value: $(tt.params.application)
+          - name: imageregistry
+            value: $(tt.params.imageregistry)
+          - name: imagename
+            value: $(tt.params.imagename)
+          - name: imagetag
+            value: $(tt.params.imagetag)
+          - name: workspace
+            value: $(tt.params.workspace)
+          - name: workspacerepo
+            value: $(tt.params.workspacerepo)
+          # Pinned here on purpose, NOT taken from the payload. A caller that
+          # can name its own approvers has defeated the gate. TriggerTemplate
+          # params are strings besides, so threading the Pipeline's array-typed
+          # `approvers` through a binding would be awkward even if it were safe.
+          - name: approvers
+            value:
+              - aad-JShollenbergera@markelcorp.onmicrosoft.com
+          - name: number-of-approvals
+            value: '1'
+        workspaces:
+          # The Pipeline declares workspace-helm and every task mounts it, so
+          # the run has to bind it. ReadWriteOnce is enough: the tasks are
+          # strictly sequential via runAfter.
+          - name: workspace-helm
+            volumeClaimTemplate:
+              spec:
+                accessModes: ['ReadWriteOnce']
+                resources:
+                  requests:
+                    storage: 1Gi
+                # storageClassName: gp3-csi
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: promotion-nonprod
+  namespace: app-gitops
+spec:
+  serviceAccountName: tekton-triggers-azure-devops
+  triggers:
+    - name: azure-devops
+      interceptors:
+        - name: authenticate-and-validate
+          ref:
+            name: cel
+          params:
+            - name: filter
+              # compareSecret does a constant-time comparison against the Secret
+              # above, so the shared secret stays out of this manifest. It needs
+              # the scoped `secrets get` in the Role.
+              #
+              # The has() checks turn a malformed payload into a rejected event
+              # rather than a TriggerTemplate failure with no obvious cause.
+              value: >-
+                header.canonical('X-Azdo-Token').compareSecret('token', 'azure-devops-webhook-secret') &&
+                body.source == 'azure-devops' &&
+                has(body.application) && has(body.imagename) && has(body.imagetag)
+      bindings:
+        - ref: azure-devops-promotion
+      template:
+        ref: promotion-nonprod
+---
+# Only needed if ADO reaches the cluster from outside. A self-hosted agent on
+# the internal network can POST to the Service directly:
+#
+#   http://el-promotion-nonprod.app-gitops.svc.cluster.local:8080
+#
+# which is the better arrangement - it keeps the trigger off the internet
+# entirely. If you do expose it, pair this Route with a NetworkPolicy, because
+# the shared secret is then the only thing in front of a pipeline that pushes to
+# git and syncs ArgoCD.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: el-promotion-nonprod
+  namespace: app-gitops
+spec:
+  to:
+    kind: Service
+    name: el-promotion-nonprod
+  port:
+    targetPort: http-listener
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

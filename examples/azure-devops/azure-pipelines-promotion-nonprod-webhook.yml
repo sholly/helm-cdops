@@ -1,0 +1,153 @@
+# Triggers the `promotion-nonprod` Tekton pipeline (namespace app-gitops) from
+# Azure DevOps by POSTing to a Tekton Triggers EventListener.
+#
+# The cluster side is examples/openshift/eventlistener-promotion-nonprod.yaml;
+# the POST itself is trigger-promotion-webhook.sh next to this file.
+#
+# Compare with the other two in this directory:
+#   azure-pipelines-promotion-nonprod.yml          oc login with a SA token
+#   azure-pipelines-promotion-nonprod-svcconn.yml  ADO Kubernetes service
+#                                                  connection
+#
+# What this path gives up and what it buys:
+#   + No cluster credential on the ADO side, and no oc or tkn on the agent -
+#     only curl. Nothing to install, nothing to rotate but one shared secret.
+#   + The pipeline name, the ServiceAccount, the approvers, the run timeout and
+#     the workspace binding all live in the TriggerTemplate, under the cluster
+#     team's control. ADO cannot change what runs, only ask for it.
+#   - The response names the event, not the run. This job cannot follow the
+#     logs, cannot fail when the promotion fails, and cannot cancel anything -
+#     there is no waitForCompletion here because there is no way to implement
+#     one. It is fire-and-forget by construction.
+#
+# Prerequisites
+#   - examples/openshift/eventlistener-promotion-nonprod.yaml applied to
+#     app-gitops, and the Secret's token replaced with a real one.
+#   - An ADO variable group `openshift-cdops-webhook` holding:
+#       elUrl       the EventListener URL (see the comment on elUrl below)
+#       elToken     the shared secret   (mark as secret)
+#       elCaBundle  CA for the Route, PEM (secret; empty for http or a public CA)
+#
+# If you keep this pipeline in another repo, either add that repo under
+# `resources.repositories` and `checkout` both, or copy the script in.
+
+name: promote-${{ parameters.application }}-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger: none
+
+parameters:
+  - name: application
+    displayName: Application (manifest filename under test/, sit/, uat/)
+    type: string
+    default: test1
+  - name: imagename
+    displayName: Image name
+    type: string
+    default: dummyapi.host
+  - name: imagetag
+    displayName: Image tag
+    type: string
+    default: 0.0.2.90-latest
+  - name: imageregistry
+    displayName: Image registry (blank = TriggerTemplate default)
+    type: string
+    default: ''
+  - name: workspace
+    displayName: Workspace (blank = TriggerTemplate default)
+    type: string
+    default: ''
+  - name: workspacerepo
+    displayName: GitOps repository (blank = TriggerTemplate default)
+    type: string
+    default: ''
+
+# Note what is NOT a parameter here: approvers and number-of-approvals. The
+# TriggerTemplate pins them, because a caller that can name its own approvers
+# has defeated the gate.
+
+variables:
+  - group: openshift-cdops-webhook
+
+jobs:
+  - job: promote
+    displayName: Request promotion through test, SIT, UAT
+    # Minutes, not hours: this job posts an event and exits. The promotion then
+    # runs on the cluster for as long as the approvals take.
+    timeoutInMinutes: 10
+    pool:
+      # Can be a Microsoft-hosted agent, but only if the EventListener Route is
+      # reachable from the internet. A self-hosted agent on the internal network
+      # can POST to the in-cluster Service instead and keep it unexposed - the
+      # better arrangement.
+      name: Default
+    steps:
+      - checkout: self
+
+      # No tool installation step: curl is all this needs.
+      - bash: examples/azure-devops/trigger-promotion-webhook.sh
+        displayName: POST promotion event
+        env:
+          # Secret variables are not exported automatically; each one has to be
+          # mapped here by hand.
+          EL_URL: $(elUrl)
+          EL_TOKEN: $(elToken)
+          EL_CA_BUNDLE: $(elCaBundle)
+          APPLICATION: ${{ parameters.application }}
+          IMAGE_NAME: ${{ parameters.imagename }}
+          IMAGE_TAG: ${{ parameters.imagetag }}
+          # Blank values are dropped from the payload, so the TriggerTemplate's
+          # default applies rather than an empty string reaching the Pipeline.
+          IMAGE_REGISTRY: ${{ parameters.imageregistry }}
+          WORKSPACE_NAME: ${{ parameters.workspace }}
+          WORKSPACE_REPO: ${{ parameters.workspacerepo }}
+
+# ----------------------------------------------------------------------------
+# Verifying the trigger end to end, the first time
+#
+#   # the listener is up
+#   oc get eventlistener promotion-nonprod -n app-gitops
+#   oc get pods -n app-gitops -l eventlistener=promotion-nonprod
+#
+#   # the URL to put in elUrl
+#   #   internal agent, nothing exposed (preferred):
+#   echo "http://el-promotion-nonprod.app-gitops.svc.cluster.local:8080"
+#   #   through the Route:
+#   echo "https://$(oc get route el-promotion-nonprod -n app-gitops -o jsonpath='{.spec.host}')"
+#
+#   # watch it arrive while the ADO job runs
+#   oc logs -n app-gitops -l eventlistener=promotion-nonprod -f
+#
+#   # the run it created
+#   oc get pipelinerun -n app-gitops -l azure-devops/build-id=<buildId>
+#
+# A rejected event is a 401 from the sink and one line in that log. An accepted
+# event whose PipelineRun then fails to create is a 2xx and a louder line in the
+# same log - which is why the log is the first place to look, not the ADO job.
+#
+# ----------------------------------------------------------------------------
+# Service hooks instead of a pipeline step
+#
+# ADO can also POST on its own from Project settings -> Service hooks (on build
+# completion, say), with no pipeline YAML at all. That request comes from
+# Microsoft's cloud rather than your network, so the Route has to be
+# internet-facing, and the body is ADO's own event schema - the TriggerBinding
+# above would need rewriting against it, and the CEL filter would have to
+# authenticate with basic auth rather than a custom header. Worth it for
+# "promote whenever this build succeeds"; not worth it for a parameterised,
+# on-demand promotion, which is what the job above is.
+#
+# ----------------------------------------------------------------------------
+# About the approval gates
+#
+# promotion-nonprod deploys test unattended, then parks on an ApprovalTask
+# before SIT and again before UAT, each with a 24h task timeout. On this path
+# that is simply how it is: people approve in the OpenShift console, or with
+# `opc approvaltask approve <name>`, and `oc get approvaltasks -n app-gitops`
+# lists what is pending. The ADO job is long gone by then.
+#
+# This suits the webhook path better than the oc/tkn ones, in fact - there is no
+# temptation to hold an agent open for two days waiting on a human.
+#
+# Runs created here carry the tekton.dev/pipeline=promotion-nonprod label that
+# Tekton sets from pipelineRef, so they appear in the RHDH tekton-trigger card
+# next to the ones the Deploy button creates.
