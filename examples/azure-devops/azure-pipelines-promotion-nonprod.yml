@@ -1,6 +1,9 @@
 # Triggers the `promotion-nonprod` Tekton pipeline (namespace app-gitops) from
 # Azure DevOps with oc/tkn and an OpenShift ServiceAccount token.
 #
+# See azure-pipelines-promotion-nonprod-svcconn.yml for the same job driven by
+# an ADO Kubernetes service connection instead of a token in a variable group.
+#
 # The work is in promote-nonprod.sh next to this file; this YAML only collects
 # the inputs and maps the secrets. If you keep this pipeline in another repo,
 # either add that repo under `resources.repositories` and `checkout` both, or

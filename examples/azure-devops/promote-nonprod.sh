@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
 #
-# Creates a `promotion-nonprod` PipelineRun on OpenShift with a ServiceAccount
-# token, and optionally streams its logs and waits for it.
+# Creates a `promotion-nonprod` PipelineRun on OpenShift, and optionally streams
+# its logs and waits for it.
 #
-# Called by azure-pipelines-promotion-nonprod.yml, but it is a plain script with
-# no ADO dependencies - export the same variables and it runs from a laptop.
+# Authenticates one of two ways, whichever the caller set up:
 #
-# Required:
+#   KUBECONFIG already set   - nothing to do. This is the ADO Kubernetes service
+#                              connection path: `Kubernetes@1` with
+#                              `command: login` writes a kubeconfig and exports
+#                              KUBECONFIG for the rest of the job, and both oc
+#                              and tkn honour it.
+#   OCP_SERVER + OCP_TOKEN   - the script runs `oc login` itself. This is the
+#                              bare ServiceAccount-token path.
+#
+# Called by azure-pipelines-promotion-nonprod.yml (token) and
+# azure-pipelines-promotion-nonprod-svcconn.yml (service connection), but it is
+# a plain script with no ADO dependencies - export the same variables and it
+# runs from a laptop.
+#
+# Required (token path only):
 #   OCP_SERVER            https://api.<cluster>:6443
 #   OCP_TOKEN             ServiceAccount token (see rbac-azure-devops.yaml)
 # Optional:
-#   OCP_CA_BUNDLE         API server CA, PEM. Omit for a publicly trusted cert.
-#   OCP_NAMESPACE         default app-gitops
+#   OCP_CA_BUNDLE         API server CA, PEM. Token path only; omit for a
+#                         publicly trusted cert.
+#   OCP_NAMESPACE         default app-gitops. The service connection may pin a
+#                         namespace of its own, so every oc/tkn call below
+#                         passes -n explicitly rather than trusting the
+#                         kubeconfig context.
 #   PIPELINE_SA           SA the TaskRuns run as, default `pipeline`
 #   TEKTON_TIMEOUT        whole-run timeout, default 72h
 #   IMAGE_REGISTRY IMAGE_NAME IMAGE_TAG WORKSPACE_NAME WORKSPACE_REPO
@@ -25,9 +41,6 @@
 # Deliberately no `set -x`: it would echo OCP_TOKEN into the build log.
 set -euo pipefail
 
-: "${OCP_SERVER:?OCP_SERVER is required}"
-: "${OCP_TOKEN:?OCP_TOKEN is required}"
-
 NS=${OCP_NAMESPACE:-app-gitops}
 PIPELINE=promotion-nonprod
 SA=${PIPELINE_SA:-pipeline}
@@ -36,14 +49,25 @@ WAIT=$(printf '%s' "${WAIT:-false}" | tr '[:upper:]' '[:lower:]')
 TMP=${AGENT_TEMPDIRECTORY:-${TMPDIR:-/tmp}}
 
 # --------------------------------------------------------------------- login --
-login_args=(--token="${OCP_TOKEN}" --server="${OCP_SERVER}")
-if [ -n "${OCP_CA_BUNDLE:-}" ]; then
-  printf '%s\n' "${OCP_CA_BUNDLE}" >"${TMP}/ocp-ca.crt"
-  login_args+=(--certificate-authority="${TMP}/ocp-ca.crt")
+# An explicit token wins, so a caller can override a service connection's
+# kubeconfig by setting OCP_TOKEN.
+if [ -n "${OCP_TOKEN:-}" ]; then
+  : "${OCP_SERVER:?OCP_SERVER is required alongside OCP_TOKEN}"
+
+  login_args=(--token="${OCP_TOKEN}" --server="${OCP_SERVER}")
+  if [ -n "${OCP_CA_BUNDLE:-}" ]; then
+    printf '%s\n' "${OCP_CA_BUNDLE}" >"${TMP}/ocp-ca.crt"
+    login_args+=(--certificate-authority="${TMP}/ocp-ca.crt")
+  fi
+
+  oc login "${login_args[@]}" >/dev/null
+elif [ -z "${KUBECONFIG:-}" ]; then
+  echo "Need either OCP_SERVER + OCP_TOKEN, or a KUBECONFIG from an ADO" >&2
+  echo "Kubernetes service connection (Kubernetes@1 with command: login)." >&2
+  exit 2
 fi
 
-oc login "${login_args[@]}" >/dev/null
-echo "Authenticated to ${OCP_SERVER} as $(oc whoami)"
+echo "Authenticated to $(oc whoami --show-server) as $(oc whoami)"
 
 # Fail here with a readable message rather than on a create whose rejection is
 # buried in an admission webhook error.

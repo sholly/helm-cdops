@@ -11,7 +11,15 @@
 #
 #   oc apply -n app-gitops -f examples/openshift/rbac-azure-devops.yaml
 #
-# Then read the token and the API server CA out for the ADO variable group:
+# This same identity backs either ADO authentication style.
+#
+# For a Kubernetes service connection (Service Account method), paste the whole
+# Secret object into its Secret field - ADO reads token and ca.crt out of it:
+#
+#   oc whoami --show-server                            # -> Server URL
+#   oc get secret azure-devops-promoter-token -n app-gitops -o json
+#
+# For a bare token in a variable group, read the two values out individually:
 #
 #   oc get secret azure-devops-promoter-token -n app-gitops \
 #     -o jsonpath='{.data.token}' | base64 -d          # -> ocpToken (secret)
