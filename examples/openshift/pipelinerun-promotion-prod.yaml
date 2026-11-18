@@ -1,0 +1,84 @@
+# A ready-to-run `promotion-prod` PipelineRun. Start it with:
+#
+#   oc create -n app-gitops -f examples/openshift/pipelinerun-promotion-prod.yaml
+#
+# Same shape as pipelinerun-promotion-nonprod.yaml - different pipelineRef, one
+# gate instead of two, and a shorter timeout to match.
+#
+# What the run does, in order:
+#
+#          approval-prod  <- parks here FIRST; nothing has been committed yet
+#   prod:  clone gitops repo -> patch image coords -> commit/push -> argocd sync
+#
+# Because the gate comes before the clone, an unapproved run leaves the prod
+# GitOps path untouched and expires on its own after the ApprovalTask's 24h.
+#
+# Clear the gate in the OpenShift console, or:
+#
+#   oc get approvaltasks -n app-gitops
+#   opc approvaltask approve <name> -n app-gitops
+#
+# NOTE: the Pipeline's approval description currently reads "to SIT" - it is
+# copied from promotion-nonprod. The gate itself is the prod gate; only the text
+# the approver sees is wrong.
+---
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: promotion-prod-
+  namespace: app-gitops
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+    app.kubernetes.io/managed-by: manual
+spec:
+  pipelineRef:
+    name: promotion-prod
+  taskRunTemplate:
+    # Needs the Azure Repos git credential (git-clone, git-cli) and the ArgoCD
+    # env secret (argocd-task-sync-and-wait). Worth a separate, prod-scoped SA
+    # rather than the shared `pipeline` one if the prod GitOps repo or ArgoCD
+    # instance takes a different credential.
+    serviceAccountName: pipeline
+  timeouts:
+    # One 24h gate plus headroom. Still has to beat Tekton's 1h default, which
+    # would otherwise cancel the run while it waited for the approver.
+    pipeline: 26h0m0s
+  params:
+    - name: application
+      value: test1
+    - name: imageregistry
+      value: 'markel.jfrog.io/ids-docker-prod-local'
+    - name: imagename
+      value: 'dummyapi.host'
+    # Promote the exact tag that cleared UAT in promotion-nonprod. A floating
+    # tag like `-latest` means the image prod gets is whatever the registry
+    # points at when the approver gets round to it, not what was tested.
+    - name: imagetag
+      value: 0.0.2.90-latest
+    # Syncs the ArgoCD app `prod-<workspace>-root`.
+    - name: workspace
+      value: 'jbanks-workspace'
+    - name: workspacerepo
+      value: 'https://dev.azure.com/markelcorp/International%20DevOps/_git/jbanks-workspace-gitops'
+    # Array-typed, so a sequence - NOT a quoted string. This is the only thing
+    # standing in front of a prod deploy, so it belongs to whoever owns prod
+    # change control; `group:<groupName>` names a group.
+    - name: approvers
+      value:
+        - aad-JShollenbergera@markelcorp.onmicrosoft.com
+    # Raise this for prod if change control calls for two sets of eyes - but it
+    # has to be <= the number of distinct identities `approvers` resolves to, or
+    # the gate can never be satisfied.
+    - name: number-of-approvals
+      value: '1'
+  workspaces:
+    # Required: the Pipeline declares workspace-helm and every task mounts it.
+    # ReadWriteOnce is enough - the tasks are sequential via runAfter.
+    - name: workspace-helm
+      volumeClaimTemplate:
+        spec:
+          accessModes: ['ReadWriteOnce']
+          resources:
+            requests:
+              storage: 1Gi
+          # storageClassName: gp3-csi

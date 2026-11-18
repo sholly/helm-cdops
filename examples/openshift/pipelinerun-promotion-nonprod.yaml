@@ -1,0 +1,89 @@
+# A ready-to-run `promotion-nonprod` PipelineRun. Start it with:
+#
+#   oc create -n app-gitops -f examples/openshift/pipelinerun-promotion-nonprod.yaml
+#
+# `oc create`, not `oc apply`: the run below uses generateName so the API server
+# picks the suffix and repeated runs never collide, and `apply` rejects a
+# resource with no name. Add `--dry-run=server` to validate without starting
+# anything, and `-o name` to capture the generated name for `tkn ... logs -f`.
+#
+# What the run does, in order:
+#
+#   test:  clone gitops repo -> patch image coords -> commit/push -> argocd sync
+#          |
+#          approval-sit   <- parks here; test has ALREADY deployed
+#   sit:   clone -> patch -> commit/push -> argocd sync
+#          |
+#          approval-uat
+#   uat:   clone -> patch -> commit/push -> argocd sync
+#
+# Clear the gates in the OpenShift console, or:
+#
+#   oc get approvaltasks -n app-gitops
+#   opc approvaltask approve <name> -n app-gitops
+---
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: promotion-nonprod-
+  namespace: app-gitops
+  labels:
+    app.kubernetes.io/part-of: cdops-promotion
+    # A handle for finding the run later. The EventListener path stamps
+    # azure-devops/build-id here instead; see eventlistener-promotion-nonprod.yaml.
+    app.kubernetes.io/managed-by: manual
+spec:
+  pipelineRef:
+    name: promotion-nonprod
+  taskRunTemplate:
+    # Needs the Azure Repos git credential (git-clone, git-cli) and the ArgoCD
+    # env secret (argocd-task-sync-and-wait). `pipeline` is the SA the operator
+    # creates in every namespace; it is only the right answer here if those two
+    # secrets have been attached to it.
+    serviceAccountName: pipeline
+  timeouts:
+    # Tekton defaults a run to 1h, which would cancel it while it was still
+    # parked on the SIT approval. Must exceed the sum of the gate waits - the
+    # Pipeline gives each ApprovalTask 24h, so two gates need more than 48h.
+    pipeline: 72h0m0s
+  params:
+    # Every param has a default in the Pipeline, so a minimal run is really just
+    # application + imagename + imagetag. The rest are spelled out here because
+    # the defaults are one developer's workspace, not a sensible shared value.
+    - name: application
+      value: test1
+    - name: imageregistry
+      value: 'markel.jfrog.io/ids-docker-prod-local'
+    - name: imagename
+      value: 'dummyapi.host'
+    - name: imagetag
+      value: 0.0.2.90-latest
+    # `workspace` names the ArgoCD root app per environment, as
+    # <env>-<workspace>-root - so this value must match what ArgoCD has, or the
+    # sync task fails after the commit has already been pushed.
+    - name: workspace
+      value: 'jbanks-workspace'
+    - name: workspacerepo
+      value: 'https://dev.azure.com/markelcorp/International%20DevOps/_git/jbanks-workspace-gitops'
+    # Array-typed, so it is a sequence - NOT a quoted string. Only identities
+    # listed here can clear the gates, and `group:<groupName>` names a group.
+    - name: approvers
+      value:
+        - aad-JShollenbergera@markelcorp.onmicrosoft.com
+    - name: number-of-approvals
+      value: '1'
+  workspaces:
+    # The Pipeline declares workspace-helm and every task mounts it, so the run
+    # has to bind it or it will not start. ReadWriteOnce is enough: the tasks are
+    # strictly sequential via runAfter, so only one pod holds the volume at a
+    # time. The PVC is deleted with the PipelineRun.
+    - name: workspace-helm
+      volumeClaimTemplate:
+        spec:
+          accessModes: ['ReadWriteOnce']
+          resources:
+            requests:
+              storage: 1Gi
+          # Uncomment if the cluster has no default StorageClass, or if the
+          # default one is WaitForFirstConsumer with topology the run cannot meet.
+          # storageClassName: gp3-csi
